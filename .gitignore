@@ -1,0 +1,42 @@
+# --- Python (backend/, poc/) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+wheels/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+
+# SQLite databases (created at runtime, not shipped)
+*.db
+*.db-journal
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# --- Secrets / local env ---
+# Real .env files are never committed; only the .env.example templates are.
+.env
+backend/.env
+poc/whatsapp/.env
+
+# --- WPPConnect PoC spike artifacts (raw dumps from a real session) ---
+poc/whatsapp/output/
+
+# --- Editor / OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+
+# --- Local tool state (not part of the app) ---
+.claude/
+.serena/

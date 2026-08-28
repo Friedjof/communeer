@@ -1,0 +1,61 @@
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: sqlite:////data/communeer.db
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:?set in .env}
+      SESSION_COOKIE_SECURE: "true"
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:?set in .env}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?set in .env}
+      # Deliberately still defaults to mock: the real integration's
+      # community-discovery logic is unverified against real data, so a
+      # fresh `docker compose up` should never land on it by accident.
+      # Opt in via WHATSAPP_PROVIDER=wppconnect in .env.
+      WHATSAPP_PROVIDER: ${WHATSAPP_PROVIDER:-mock}
+      WPPCONNECT_BASE_URL: http://wppconnect:21465
+      WPPCONNECT_SECRET_KEY: ${WPPCONNECT_SECRET_KEY:-change-me}
+      WPPCONNECT_SESSION_NAME: ${WPPCONNECT_SESSION_NAME:-communeer}
+      CORS_ALLOW_ORIGINS: "[]" # same-origin behind Caddy, no cross-origin calls in prod
+      REDIS_URL: redis://redis:6379/0 # reserved for future background jobs; unused today
+    volumes:
+      - communeer_sqlite_data:/data
+    expose:
+      - "8000"
+    depends_on:
+      - redis
+      - wppconnect
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+
+  wppconnect:
+    image: wppconnect/wppconnect-server:${WPP_SERVER_TAG:-latest}
+    environment:
+      PORT: "21465"
+      SECRET_KEY: ${WPPCONNECT_SECRET_KEY:?set in .env}
+      TOKEN_STORE_TYPE: file
+      CUSTOM_USER_DATA_DIR: /usr/src/wpp-server/userDataDir/
+    volumes:
+      - wppconnect_tokens:/usr/src/wpp-server/tokens
+      - wppconnect_user_data:/usr/src/wpp-server/userDataDir
+    expose:
+      - "21465"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:21465/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  communeer_sqlite_data: {}
+  wppconnect_tokens: {}
+  wppconnect_user_data: {}
