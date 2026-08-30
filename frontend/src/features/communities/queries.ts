@@ -2,6 +2,13 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/r
 import { memberKeys } from '../members/queries'
 import * as communitiesApi from './api'
 
+// These endpoints only ever read Communeer's own local DB (never WhatsApp/
+// WPPConnect directly), so short polling here is cheap and keeps the
+// dashboard reflecting webhook-driven backend changes (see
+// `communeer/webhooks/router.py`) without the user needing to click
+// "Sync now".
+const LIVE_REFETCH_INTERVAL_MS = 25_000
+
 export const communityKeys = {
   all: ['communities'] as const,
   detail: (communityId: string) => ['communities', communityId] as const,
@@ -14,6 +21,7 @@ export function communitiesQueryOptions() {
   return queryOptions({
     queryKey: communityKeys.all,
     queryFn: communitiesApi.getCommunities,
+    refetchInterval: LIVE_REFETCH_INTERVAL_MS,
   })
 }
 
@@ -34,6 +42,7 @@ export function useCommunityGroups(communityId: string) {
     queryKey: communityKeys.groups(communityId),
     queryFn: () => communitiesApi.getCommunityGroups(communityId),
     enabled: Boolean(communityId),
+    refetchInterval: LIVE_REFETCH_INTERVAL_MS,
   })
 }
 

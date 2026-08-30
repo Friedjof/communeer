@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from communeer.communities.service import (
@@ -22,6 +23,7 @@ from communeer.communities.service import (
     get_community_pending_request_count,
 )
 from communeer.models import (
+    ActivityType,
     AuditEvent,
     Community,
     CommunityMemberSnapshot,
@@ -37,6 +39,29 @@ from communeer.providers.whatsapp.base import ProviderMember, WhatsAppProvider
 
 class CommunityNotFoundError(Exception):
     """Raised when the provider has no community with the given wa_id."""
+
+
+class SyncInProgressError(Exception):
+    """Raised when this sync collided with a concurrent sync of the same
+    community. Two overlapping syncs (a double-clicked "Sync now", or a
+    manual sync racing the webhook's `onparticipantschanged`-triggered
+    resync) can both decide the same membership is new and both attempt to
+    insert it — only one commit wins, the other trips `uq_group_membership`
+    (see `models/membership.py`). Callers should turn this into a clean,
+    retryable error (409) rather than letting the raw `IntegrityError`
+    propagate as a generic 500."""
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """SQLite drops tzinfo on round-trip (confirmed empirically elsewhere in
+    this codebase — see `renewals/service.py`'s own `_ensure_utc`): a value
+    read back via a fresh query in the same session can come back naive even
+    though it was written UTC-aware. Every datetime this module compares is
+    UTC by convention, so a naive value is re-tagged rather than compared
+    naively against a timezone-aware value (which raises `TypeError`)."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 @dataclass
@@ -91,6 +116,22 @@ def _upsert_member(db: Session, provider_member: ProviderMember, cache: dict[str
 
 
 def sync_community(
+    db: Session,
+    provider: WhatsAppProvider,
+    community_wa_id: str,
+    actor_user_id: uuid.UUID | None = None,
+) -> Community:
+    """Thin wrapper around `_sync_community_impl`: turns a concurrent-sync
+    collision (see `SyncInProgressError` above) into a clean, catchable error
+    instead of letting the raw `IntegrityError` propagate as a generic 500."""
+    try:
+        return _sync_community_impl(db, provider, community_wa_id, actor_user_id)
+    except IntegrityError as exc:
+        db.rollback()
+        raise SyncInProgressError(community_wa_id) from exc
+
+
+def _sync_community_impl(
     db: Session,
     provider: WhatsAppProvider,
     community_wa_id: str,
@@ -176,6 +217,39 @@ def sync_community(
                 membership.joined_at = provider_membership.joined_at or now
             elif provider_membership.joined_at is not None:
                 membership.joined_at = provider_membership.joined_at
+            # `last_message_at`/`last_seen_at`: same "set once / advance
+            # forward only, never regress or blank" pattern as `joined_at`
+            # above — but here there's no "first observed by Communeer"
+            # fallback (unlike `joined_at`, `None` is a real, honest answer:
+            # "never posted"/"no presence data", not "unknown because we
+            # haven't looked yet"). Only ever move these forward when the
+            # provider supplies a strictly later value; a `None` or an
+            # earlier value from this sync must never overwrite an
+            # already-stored one.
+            if provider_membership.last_message_at is not None and (
+                _as_utc(membership.last_message_at) is None
+                or provider_membership.last_message_at > _as_utc(membership.last_message_at)
+            ):
+                membership.last_message_at = provider_membership.last_message_at
+            if provider_membership.last_seen_at is not None and (
+                _as_utc(membership.last_seen_at) is None
+                or provider_membership.last_seen_at > _as_utc(membership.last_seen_at)
+            ):
+                membership.last_seen_at = provider_membership.last_seen_at
+            # Unified "last activity" — same forward-only rule, compared
+            # against `last_activity_at` specifically (not `last_message_at`
+            # above): a provider sync can only ever supply `type="message"`
+            # (parsed chat history), so this never overwrites a *newer*
+            # reaction the live webhook already recorded — it only fills in
+            # activity a sync can see that the webhook hasn't captured yet
+            # (e.g. history that predates the webhook being wired up at all).
+            if provider_membership.last_activity_at is not None and (
+                _as_utc(membership.last_activity_at) is None
+                or provider_membership.last_activity_at > _as_utc(membership.last_activity_at)
+            ):
+                membership.last_activity_type = ActivityType(provider_membership.last_activity_type)
+                membership.last_activity_at = provider_membership.last_activity_at
+                membership.last_activity_content = provider_membership.last_activity_content
             stats.memberships_upserted += 1
             if membership.status == MembershipStatus.pending:
                 stats.pending_requests_found += 1

@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from communeer.models import (
+    ActivityType,
     Community,
     CommunityMemberSnapshot,
     Group,
@@ -49,6 +50,23 @@ def get_community_admin_count(db: Session, community_id: uuid.UUID) -> int:
     ).scalar_one()
 
 
+def get_group_admin_count(db: Session, group_id: uuid.UUID) -> int:
+    """Members who are admin of this one group."""
+    return db.execute(
+        select(func.count(func.distinct(GroupMembership.member_id))).where(
+            GroupMembership.group_id == group_id,
+            GroupMembership.is_admin.is_(True),
+        )
+    ).scalar_one()
+
+
+def get_group_last_message_at(db: Session, group_id: uuid.UUID) -> datetime | None:
+    """Most recent `last_message_at` across this group's memberships."""
+    return db.execute(
+        select(func.max(GroupMembership.last_message_at)).where(GroupMembership.group_id == group_id)
+    ).scalar_one()
+
+
 def get_community_pending_request_count(db: Session, community_id: uuid.UUID) -> int:
     group_ids = get_group_ids_for_community(db, community_id)
     if not group_ids:
@@ -68,6 +86,16 @@ class MemberAggregate:
     is_community_admin: bool
     group_count: int
     joined_at: datetime | None
+    last_message_at: datetime | None
+    last_seen_at: datetime | None
+    # Unified "last activity" (message/reaction/view), aggregated the same
+    # way as last_message_at/last_seen_at above (latest across this
+    # community's groups) — whichever membership carries the most recent
+    # last_activity_at wins, and its type+content come along together (never
+    # mixed-and-matched from two different memberships).
+    last_activity_type: ActivityType | None
+    last_activity_at: datetime | None
+    last_activity_content: str | None
 
 
 def list_community_members(db: Session, community: Community) -> list[MemberAggregate]:
@@ -80,6 +108,11 @@ def list_community_members(db: Session, community: Community) -> list[MemberAggr
     can belong to multiple communities (the mock fixture deliberately has
     overlap) and their global first-seen date could reflect a different
     community entirely.
+
+    `last_message_at`/`last_seen_at` are the *latest* activity across this
+    community's groups (same "per-community, not global" reasoning as
+    `joined_at` — just max instead of min, since more-recent activity in any
+    one of a member's groups is the more relevant signal).
     """
     group_ids = get_group_ids_for_community(db, community.id)
     if not group_ids:
@@ -98,7 +131,16 @@ def list_community_members(db: Session, community: Community) -> list[MemberAggr
         agg = aggregates.get(member.id)
         if agg is None:
             agg = MemberAggregate(
-                member=member, is_admin=False, is_community_admin=False, group_count=0, joined_at=None
+                member=member,
+                is_admin=False,
+                is_community_admin=False,
+                group_count=0,
+                joined_at=None,
+                last_message_at=None,
+                last_seen_at=None,
+                last_activity_type=None,
+                last_activity_at=None,
+                last_activity_content=None,
             )
             aggregates[member.id] = agg
         agg.group_count += 1
@@ -108,6 +150,20 @@ def list_community_members(db: Session, community: Community) -> list[MemberAggr
                 agg.is_community_admin = True
         if membership.joined_at is not None and (agg.joined_at is None or membership.joined_at < agg.joined_at):
             agg.joined_at = membership.joined_at
+        if membership.last_message_at is not None and (
+            agg.last_message_at is None or membership.last_message_at > agg.last_message_at
+        ):
+            agg.last_message_at = membership.last_message_at
+        if membership.last_seen_at is not None and (
+            agg.last_seen_at is None or membership.last_seen_at > agg.last_seen_at
+        ):
+            agg.last_seen_at = membership.last_seen_at
+        if membership.last_activity_at is not None and (
+            agg.last_activity_at is None or membership.last_activity_at > agg.last_activity_at
+        ):
+            agg.last_activity_type = membership.last_activity_type
+            agg.last_activity_at = membership.last_activity_at
+            agg.last_activity_content = membership.last_activity_content
 
     return list(aggregates.values())
 
@@ -133,19 +189,26 @@ class GroupHistorySeries:
 def get_group_history_for_community(db: Session, community_id: uuid.UUID) -> list[GroupHistorySeries]:
     """Every group's growth-history data points, in one pass — the point of
     this endpoint is a single response the frontend can build a per-group
-    comparison chart from, instead of firing one request per group."""
+    comparison chart from, instead of firing one request per group.
+
+    All snapshots for all of the community's groups are fetched in a single
+    query (instead of one query per group) and then split back out per group
+    in Python, preserving each group's chronological (oldest-first) order."""
     groups = db.execute(
         select(Group).where(Group.community_id == community_id).order_by(Group.name)
     ).scalars().all()
 
-    series: list[GroupHistorySeries] = []
-    for group in groups:
-        snapshots = list(
-            db.execute(
-                select(GroupMemberSnapshot)
-                .where(GroupMemberSnapshot.group_id == group.id)
-                .order_by(GroupMemberSnapshot.recorded_at.asc())
-            ).scalars()
-        )
-        series.append(GroupHistorySeries(group_id=group.id, group_name=group.name, snapshots=snapshots))
-    return series
+    snapshots_by_group: dict[uuid.UUID, list[GroupMemberSnapshot]] = {}
+    if groups:
+        rows = db.execute(
+            select(GroupMemberSnapshot)
+            .where(GroupMemberSnapshot.group_id.in_([group.id for group in groups]))
+            .order_by(GroupMemberSnapshot.group_id, GroupMemberSnapshot.recorded_at.asc())
+        ).scalars()
+        for snapshot in rows:
+            snapshots_by_group.setdefault(snapshot.group_id, []).append(snapshot)
+
+    return [
+        GroupHistorySeries(group_id=group.id, group_name=group.name, snapshots=snapshots_by_group.get(group.id, []))
+        for group in groups
+    ]

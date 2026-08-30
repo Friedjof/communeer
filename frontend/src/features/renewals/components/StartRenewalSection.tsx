@@ -2,9 +2,11 @@ import type { ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { TableSkeleton } from '@/components/feedback/LoadingSkeletons'
+import { useSession } from '@/features/auth/queries'
 import { MemberTable } from '@/features/members/MemberTable'
 import { useSuggestionColumns } from '../columns'
 import { useRenewalSuggestions } from '../queries'
@@ -20,6 +22,8 @@ export function StartRenewalSection({ communityId, onCampaignCreated }: StartRen
   const suggestions = useRenewalSuggestions(communityId)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [dialogOpen, setDialogOpen] = useState(false)
+  const session = useSession()
+  const isViewer = session.data?.role === 'viewer'
 
   function toggle(memberId: string) {
     setSelected((prev) => {
@@ -64,9 +68,22 @@ export function StartRenewalSection({ communityId, onCampaignCreated }: StartRen
               Clear selection
             </Button>
           </div>
-          <Button disabled={selected.size === 0} onClick={() => setDialogOpen(true)}>
-            Start renewal for {selected.size} member{selected.size === 1 ? '' : 's'}
-          </Button>
+          {isViewer ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <Button disabled>
+                    Start renewal for {selected.size} member{selected.size === 1 ? '' : 's'}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Your role doesn't have access to this</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Button disabled={selected.size === 0} onClick={() => setDialogOpen(true)}>
+              Start renewal for {selected.size} member{selected.size === 1 ? '' : 's'}
+            </Button>
+          )}
         </div>
         <MemberTable<RenewalSuggestion>
           data={suggestions.data}
@@ -83,8 +100,8 @@ export function StartRenewalSection({ communityId, onCampaignCreated }: StartRen
       <CardHeader>
         <CardTitle className="text-base">Start a renewal round</CardTitle>
         <p className="text-sm text-muted-foreground">
-          Select members to confirm, then post the request yourself in WhatsApp. Activity data isn't available yet —
-          this list is sorted by tenure and role only, never by inferred behavior.
+          Select members to confirm, then post the request yourself in WhatsApp. Sorted with members who've never
+          posted a message first — a real signal from message history, not a guess.
         </p>
       </CardHeader>
       <CardContent>{body}</CardContent>

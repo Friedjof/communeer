@@ -1,5 +1,5 @@
 import type { RowData } from '@tanstack/react-table'
-import { DataTable, type ColumnDef } from '@/components/data/DataTable'
+import { DataTable, type ColumnDef, type DataTableExportColumn } from '@/components/data/DataTable'
 
 interface MemberTableProps<TData extends RowData> {
   data: TData[]
@@ -8,6 +8,8 @@ interface MemberTableProps<TData extends RowData> {
   onRowClick?: (row: TData) => void
   searchPlaceholder?: string
   emptyMessage?: string
+  exportFileName?: string
+  exportColumns?: DataTableExportColumn<TData>[]
 }
 
 /** Thin wrapper over the generic DataTable, reused for community-wide and per-group member lists. */
@@ -17,6 +19,8 @@ export function MemberTable<TData extends RowData>({
   onRowClick,
   searchPlaceholder = 'Search members…',
   emptyMessage = 'No members found.',
+  exportFileName,
+  exportColumns,
 }: MemberTableProps<TData>) {
   return (
     <DataTable
@@ -25,6 +29,8 @@ export function MemberTable<TData extends RowData>({
       onRowClick={onRowClick}
       searchPlaceholder={searchPlaceholder}
       emptyMessage={emptyMessage}
+      exportFileName={exportFileName}
+      exportColumns={exportColumns}
     />
   )
 }

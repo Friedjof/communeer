@@ -5,9 +5,11 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { ListSkeleton } from '@/components/feedback/LoadingSkeletons'
+import { useSession } from '@/features/auth/queries'
 import { formatDate, initials } from '@/lib/format'
 import { useConfirmRenewal, useNonResponders, useRenewalCampaign } from '../queries'
 import type { RenewalConfirmation } from '../types'
@@ -57,6 +59,8 @@ function MemberIdentity({ displayName, waId }: { displayName: string; waId: stri
 
 function ConfirmationsTable({ campaignId, confirmations }: { campaignId: string; confirmations: RenewalConfirmation[] }) {
   const confirmRenewal = useConfirmRenewal(campaignId)
+  const session = useSession()
+  const isViewer = session.data?.role === 'viewer'
 
   if (confirmations.length === 0) {
     return <EmptyState title="No members in this campaign" />
@@ -85,16 +89,29 @@ function ConfirmationsTable({ campaignId, confirmations }: { campaignId: string;
               <TableCell className="text-sm text-muted-foreground">{formatDate(confirmation.respondedAt)}</TableCell>
               <TableCell className="text-right">
                 {confirmation.status === 'pending' ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={confirmRenewal.isPending && confirmRenewal.variables === confirmation.memberId}
-                    onClick={() => confirmRenewal.mutate(confirmation.memberId)}
-                  >
-                    {confirmRenewal.isPending && confirmRenewal.variables === confirmation.memberId
-                      ? 'Marking…'
-                      : 'Mark confirmed'}
-                  </Button>
+                  isViewer ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button size="sm" variant="outline" disabled>
+                            Mark confirmed
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>Your role doesn't have access to this</TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={confirmRenewal.isPending && confirmRenewal.variables === confirmation.memberId}
+                      onClick={() => confirmRenewal.mutate(confirmation.memberId)}
+                    >
+                      {confirmRenewal.isPending && confirmRenewal.variables === confirmation.memberId
+                        ? 'Marking…'
+                        : 'Mark confirmed'}
+                    </Button>
+                  )
                 ) : null}
               </TableCell>
             </TableRow>

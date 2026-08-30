@@ -4,6 +4,7 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
   useNavigate,
   useParams,
@@ -12,20 +13,38 @@ import { ApiError } from '@/api/client'
 import { AppShell } from '@/components/layout/AppShell'
 import { CommunityShell } from '@/components/layout/CommunityShell'
 import { EmptyState } from '@/components/feedback/EmptyState'
+import { RoutePendingFallback } from '@/components/feedback/LoadingSkeletons'
 import { sessionQueryOptions } from '@/features/auth/queries'
 import { LoginPage } from '@/features/auth/LoginPage'
-import { CommunityOverviewPage } from '@/features/communities/CommunityOverviewPage'
 import { communitiesQueryOptions } from '@/features/communities/queries'
-import { GroupDetailPage } from '@/features/groups/GroupDetailPage'
 import type { GroupDetailTab } from '@/features/groups/types'
-import { CommunityMembersPage } from '@/features/members/CommunityMembersPage'
-import { RenewalsPage } from '@/features/renewals/RenewalsPage'
-import { AuditLogPage } from '@/features/audit/AuditLogPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { WhatsAppSetupPage } from '@/features/whatsapp/WhatsAppSetupPage'
 import { whatsappStatusQueryOptions } from '@/features/whatsapp/queries'
 import { useUiStore } from '@/lib/uiStore'
 import { queryClient } from './queryClient'
+
+// Code-split the heavier feature pages: route matching / `beforeLoad` (the
+// auth guard above) stays eager, only the page `component` itself is
+// deferred to its own chunk. `lazyRouteComponent` throws the in-flight
+// import promise, which each route's own `pendingComponent`-driven Suspense
+// boundary (see `Match`/`MatchView` in tanstack/react-router) catches —
+// so a route transition shows `RoutePendingFallback` instead of a blank gap
+// while the chunk downloads. `LoginPage`/`SettingsPage`/`WhatsAppSetupPage`
+// and the shell/auth-guard routes stay eagerly imported above — they're
+// needed immediately (or are small) and don't need splitting.
+const CommunityOverviewPage = lazyRouteComponent(
+  () => import('@/features/communities/CommunityOverviewPage'),
+  'CommunityOverviewPage',
+)
+const GroupDetailPage = lazyRouteComponent(() => import('@/features/groups/GroupDetailPage'), 'GroupDetailPage')
+const CommunityMembersPage = lazyRouteComponent(
+  () => import('@/features/members/CommunityMembersPage'),
+  'CommunityMembersPage',
+)
+const ModerationPage = lazyRouteComponent(() => import('@/features/moderation/ModerationPage'), 'ModerationPage')
+const RenewalsPage = lazyRouteComponent(() => import('@/features/renewals/RenewalsPage'), 'RenewalsPage')
+const AuditLogPage = lazyRouteComponent(() => import('@/features/audit/AuditLogPage'), 'AuditLogPage')
 
 interface RouterContext {
   queryClient: QueryClient
@@ -121,6 +140,7 @@ function CommunityLayoutComponent() {
 const communityIndexRoute = createRoute({
   getParentRoute: () => communityLayoutRoute,
   path: '/',
+  pendingComponent: RoutePendingFallback,
   component: () => {
     const { communityId } = communityLayoutRoute.useParams()
     return <CommunityOverviewPage communityId={communityId} />
@@ -130,6 +150,7 @@ const communityIndexRoute = createRoute({
 const communityMembersRoute = createRoute({
   getParentRoute: () => communityLayoutRoute,
   path: 'members',
+  pendingComponent: RoutePendingFallback,
   component: () => {
     const { communityId } = communityLayoutRoute.useParams()
     return <CommunityMembersPage communityId={communityId} />
@@ -146,6 +167,7 @@ const communityRenewalsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): RenewalsSearch => ({
     campaignId: typeof search.campaignId === 'string' ? search.campaignId : undefined,
   }),
+  pendingComponent: RoutePendingFallback,
   component: RenewalsRouteComponent,
 })
 
@@ -182,6 +204,7 @@ const groupDetailRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): GroupDetailSearch => ({
     tab: VALID_TABS.includes(search.tab as GroupDetailTab) ? (search.tab as GroupDetailTab) : 'overview',
   }),
+  pendingComponent: RoutePendingFallback,
   component: GroupDetailRouteComponent,
 })
 
@@ -206,6 +229,16 @@ function GroupDetailRouteComponent() {
   )
 }
 
+const communityModerationRoute = createRoute({
+  getParentRoute: () => communityLayoutRoute,
+  path: 'moderation',
+  pendingComponent: RoutePendingFallback,
+  component: () => {
+    const { communityId } = communityLayoutRoute.useParams()
+    return <ModerationPage communityId={communityId} />
+  },
+})
+
 /** Deep-link straight into the Members tab of a group. */
 const groupMembersDeepLinkRoute = createRoute({
   getParentRoute: () => communityLayoutRoute,
@@ -223,6 +256,7 @@ const groupMembersDeepLinkRoute = createRoute({
 const auditRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/audit',
+  pendingComponent: RoutePendingFallback,
   component: () => (
     <div className="p-4 md:p-6">
       <AuditLogPage />
@@ -250,6 +284,7 @@ const communityRouteTree = communityLayoutRoute.addChildren([
   communityIndexRoute,
   communityMembersRoute,
   communityRenewalsRoute,
+  communityModerationRoute,
   groupDetailRoute,
   groupMembersDeepLinkRoute,
 ])

@@ -1,3 +1,47 @@
+def test_sync_route_returns_503_when_provider_is_unavailable(client, monkeypatch):
+    """`sync_community` translating a transport failure into
+    `WhatsAppProviderUnavailableError` (see `providers/whatsapp/wppconnect.py`)
+    must surface as a clean 503 at `POST /communities/{id}/sync`, not the
+    generic 500 an unguarded `httpx.HTTPError` used to produce."""
+    import communeer.sync.router as sync_router_module
+    from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
+
+    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    unity_alpha = next(c for c in client.get("/api/v1/communities").json() if c["name"] == "Unity Alpha")
+
+    def _raise_unavailable(*args, **kwargs):
+        raise WhatsAppProviderUnavailableError("boom")
+
+    monkeypatch.setattr(sync_router_module, "sync_community", _raise_unavailable)
+
+    response = client.post(f"/api/v1/communities/{unity_alpha['id']}/sync")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "service_unavailable"
+
+
+def test_sync_route_returns_409_when_a_sync_is_already_in_progress(client, monkeypatch):
+    """`sync_community`'s `IntegrityError` -> `SyncInProgressError`
+    translation (see `sync/service.py`, guarding against two overlapping
+    syncs of the same community) must surface as a clean 409 at
+    `POST /communities/{id}/sync`."""
+    import communeer.sync.router as sync_router_module
+    from communeer.sync.service import SyncInProgressError
+
+    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    unity_alpha = next(c for c in client.get("/api/v1/communities").json() if c["name"] == "Unity Alpha")
+
+    def _raise_in_progress(*args, **kwargs):
+        raise SyncInProgressError("already syncing")
+
+    monkeypatch.setattr(sync_router_module, "sync_community", _raise_in_progress)
+
+    response = client.post(f"/api/v1/communities/{unity_alpha['id']}/sync")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+
+
 def test_unauthenticated_request_returns_401_envelope(client):
     response = client.get("/api/v1/communities")
     assert response.status_code == 401
@@ -53,6 +97,9 @@ def test_login_sync_list_members_audit_flow(client):
     assert marketplace["memberCount"] == 981
     assert marketplace["memberLimit"] == 1024
     assert marketplace["pendingRequestCount"] == 3
+    for key in ("description", "adminCount", "lastMessageAt"):
+        assert key in marketplace
+    assert marketplace["adminCount"] >= 0
 
     # community-wide member list
     members = client.get(f"/api/v1/communities/{unity_alpha['id']}/members")
@@ -73,6 +120,11 @@ def test_login_sync_list_members_audit_flow(client):
     for row in group_requests.json():
         assert set(row.keys()) == {"memberId", "waId", "displayName", "requestedAt"}
 
+    # invite link: mock provider returns a deterministic (never `None`) fake link
+    invite_link = client.get(f"/api/v1/groups/{marketplace['id']}/invite-link")
+    assert invite_link.status_code == 200
+    assert invite_link.json()["inviteLink"].startswith("https://chat.whatsapp.com/")
+
     # member detail, reached via one of the group members
     a_member_id = group_members.json()[0]["memberId"]
     member_detail = client.get(f"/api/v1/members/{a_member_id}")
@@ -91,6 +143,58 @@ def test_login_sync_list_members_audit_flow(client):
     logout_response = client.post("/api/v1/auth/logout")
     assert logout_response.status_code == 204
     assert client.get("/api/v1/session").status_code == 401
+
+
+def _seed_viewer_user() -> None:
+    """Creates a `viewer`-role user directly via the DB, bypassing the
+    normal (owner-only, not yet built) user-management flow — same pattern
+    used in `test_moderation.py`."""
+    from sqlalchemy import select
+
+    from communeer.auth.security import hash_password
+    from communeer.db import SessionLocal
+    from communeer.models import User, UserRole
+
+    db = SessionLocal()
+    try:
+        existing = db.execute(select(User).where(User.username == "viewer")).scalar_one_or_none()
+        if existing is not None:
+            return
+        db.add(
+            User(
+                username="viewer",
+                password_hash=hash_password("viewer-password-123"),
+                role=UserRole.viewer,
+                is_active=True,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_viewer_role_gets_403_on_sync_but_owner_gets_200(client):
+    _seed_viewer_user()
+
+    # log in as owner first just to discover the community id, then log
+    # back out before the viewer assertions.
+    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    communities = client.get("/api/v1/communities").json()
+    unity_alpha = next(c for c in communities if c["name"] == "Unity Alpha")
+    client.post("/api/v1/auth/logout")
+
+    viewer_login = client.post("/api/v1/auth/login", json={"username": "viewer", "password": "viewer-password-123"})
+    assert viewer_login.status_code == 200
+    assert viewer_login.json()["role"] == "viewer"
+
+    sync_response = client.post(f"/api/v1/communities/{unity_alpha['id']}/sync")
+    assert sync_response.status_code == 403
+    assert sync_response.json()["error"]["code"] == "forbidden"
+
+    client.post("/api/v1/auth/logout")
+
+    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    assert client.post(f"/api/v1/communities/{unity_alpha['id']}/sync").status_code == 200
 
 
 def test_advanced_query_param_includes_raw_metadata(client):

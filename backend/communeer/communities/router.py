@@ -17,7 +17,9 @@ from communeer.communities.service import (
     get_community_admin_count,
     get_community_history,
     get_community_pending_request_count,
+    get_group_admin_count,
     get_group_history_for_community,
+    get_group_last_message_at,
     list_community_members,
 )
 from communeer.deps import get_current_user, get_db, get_provider
@@ -99,7 +101,22 @@ def list_community_groups(community_id: uuid.UUID, db: Session = Depends(get_db)
     groups = db.execute(
         select(Group).where(Group.community_id == community.id).order_by(Group.name)
     ).scalars().all()
-    return [GroupSummaryOut.model_validate(g) for g in groups]
+    return [
+        GroupSummaryOut(
+            id=g.id,
+            wa_id=g.wa_id,
+            name=g.name,
+            description=g.description,
+            picture_url=g.picture_url,
+            is_announcement_group=g.is_announcement_group,
+            member_count=g.member_count,
+            member_limit=g.member_limit,
+            pending_request_count=g.pending_request_count,
+            admin_count=get_group_admin_count(db, g.id),
+            last_message_at=get_group_last_message_at(db, g.id),
+        )
+        for g in groups
+    ]
 
 
 @router.get("/communities/{community_id}/members", response_model=list[MemberSummaryOut])
@@ -117,6 +134,11 @@ def list_community_members_route(community_id: uuid.UUID, db: Session = Depends(
             is_community_admin=agg.is_community_admin,
             group_count=agg.group_count,
             joined_at=agg.joined_at,
+            last_message_at=agg.last_message_at,
+            last_seen_at=agg.last_seen_at,
+            last_activity_type=agg.last_activity_type,
+            last_activity_at=agg.last_activity_at,
+            last_activity_content=agg.last_activity_content,
         )
         for agg in sorted(aggregates, key=lambda a: a.member.display_name)
     ]

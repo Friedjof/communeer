@@ -1,4 +1,4 @@
-import { eachWeekOfInterval, endOfWeek, format, isWithinInterval, parseISO, startOfWeek, subWeeks } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 import { useState } from 'react'
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts'
 import type { TooltipContentProps } from 'recharts'
@@ -7,39 +7,51 @@ import { formatRelative, initials } from '@/lib/format'
 import type { CommunityMemberRow } from '../../members/types'
 
 const RECENT_WINDOW_DAYS = 7
-const CHART_WINDOW_WEEKS = 8
+const CHART_WINDOW_DAYS = 14
+const DAY_MS = 24 * 60 * 60 * 1000
 const MAX_ROWS = 3
 
 interface RecentlyJoinedListProps {
   members: CommunityMemberRow[]
 }
 
-interface WeekBucket {
-  weekStart: string
+interface DayBucket {
+  bucketEnd: string
   count: number
 }
 
-function buildWeeklyBuckets(joinDates: Date[], now: Date): WeekBucket[] {
-  const rangeStart = startOfWeek(subWeeks(now, CHART_WINDOW_WEEKS - 1), { weekStartsOn: 1 })
-  const weeks = eachWeekOfInterval({ start: rangeStart, end: now }, { weekStartsOn: 1 })
+/** Rolling 24h buckets ending exactly at `now`, most recent bucket last —
+ * matches the same window definition as the "last N days" headline number
+ * above the chart, so the two never disagree about what "recent" means. This
+ * intentionally replaces calendar-week bucketing, which drew the current,
+ * still-incomplete week as a full-size bar. */
+function buildDailyBuckets(joinDates: Date[], now: Date): DayBucket[] {
+  const nowMs = now.getTime()
+  const buckets: DayBucket[] = []
 
-  return weeks.map((weekStart) => {
-    const weekEnd = endOfWeek(weekStart, { weekStartsOn: 1 })
-    const count = joinDates.filter((date) => isWithinInterval(date, { start: weekStart, end: weekEnd })).length
-    return { weekStart: weekStart.toISOString(), count }
-  })
+  for (let i = CHART_WINDOW_DAYS - 1; i >= 0; i--) {
+    const bucketEnd = nowMs - i * DAY_MS
+    const bucketStart = bucketEnd - DAY_MS
+    const count = joinDates.filter((date) => {
+      const time = date.getTime()
+      return time > bucketStart && time <= bucketEnd
+    }).length
+    buckets.push({ bucketEnd: new Date(bucketEnd).toISOString(), count })
+  }
+
+  return buckets
 }
 
 function JoinsTooltip({ active, payload }: TooltipContentProps) {
   if (!active || !payload?.length) return null
-  const bucket = payload[0]?.payload as WeekBucket | undefined
+  const bucket = payload[0]?.payload as DayBucket | undefined
   if (!bucket) return null
   return (
     <div className="rounded-lg border bg-popover px-3 py-2 text-sm shadow-md">
       <p className="font-medium tabular-nums">
         {bucket.count} join{bucket.count === 1 ? '' : 's'}
       </p>
-      <p className="text-xs text-muted-foreground">week of {format(parseISO(bucket.weekStart), 'MMM d')}</p>
+      <p className="text-xs text-muted-foreground">{format(parseISO(bucket.bucketEnd), 'MMM d')}</p>
     </div>
   )
 }
@@ -65,7 +77,7 @@ export function RecentlyJoinedList({ members }: RecentlyJoinedListProps) {
     return <p className="text-sm text-muted-foreground">No join dates recorded yet.</p>
   }
 
-  const buckets = buildWeeklyBuckets(
+  const buckets = buildDailyBuckets(
     withJoinDate.map((member) => parseISO(member.joinedAt)),
     now,
   )
@@ -81,7 +93,7 @@ export function RecentlyJoinedList({ members }: RecentlyJoinedListProps) {
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={buckets} margin={{ top: 4, right: 4, left: 0, bottom: 0 }} barCategoryGap="20%">
               <XAxis
-                dataKey="weekStart"
+                dataKey="bucketEnd"
                 tickFormatter={(value: string) => format(parseISO(value), 'MMM d')}
                 tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
                 axisLine={{ stroke: 'var(--border)' }}

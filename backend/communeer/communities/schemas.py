@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 
+from communeer.models import ActivityType
 from communeer.schemas import CamelModel
 
 
@@ -35,6 +36,19 @@ class MemberSummaryOut(CamelModel):
     is_community_admin: bool
     group_count: int
     joined_at: datetime | None
+    # Real activity signals, aggregated (max) across this member's groups in
+    # this community. `last_seen_at` is almost always `None` in practice —
+    # WhatsApp doesn't expose presence data for most accounts (verified
+    # live) — the frontend renders that as "not available", not "unknown".
+    last_message_at: datetime | None
+    last_seen_at: datetime | None
+    # Unified "last activity" (message/reaction/view), aggregated the same
+    # way as last_message_at/last_seen_at above: whichever of this member's
+    # group memberships in this community has the most recent
+    # last_activity_at wins, and its type+content come along with it.
+    last_activity_type: ActivityType | None
+    last_activity_at: datetime | None
+    last_activity_content: str | None
 
 
 class CommunityHistoryPointOut(CamelModel):

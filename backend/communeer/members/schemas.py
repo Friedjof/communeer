@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from communeer.models import MembershipStatus
+from communeer.models import ActivityType, MembershipStatus
 from communeer.schemas import CamelModel
 
 
@@ -13,6 +13,9 @@ class MemberMembershipOut(CamelModel):
     is_admin: bool
     status: MembershipStatus
     joined_at: datetime | None
+    last_activity_type: ActivityType | None
+    last_activity_at: datetime | None
+    last_activity_content: str | None
 
 
 class MemberDetailOut(CamelModel):

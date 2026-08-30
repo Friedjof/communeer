@@ -1,11 +1,10 @@
 import { legacyCreateColumnHelper as createColumnHelper } from '@tanstack/react-table/legacy'
-import { HelpCircle } from 'lucide-react'
 import { useMemo } from 'react'
 import type { ColumnDef } from '@/components/data/DataTable'
+import { ActivityColumnHeader, MessageActivityBadge } from '@/components/data/MessageActivityCell'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { MaskedPhone } from '@/features/members/MaskedPhone'
+import { MaskedPhone } from '@/features/members/components/MaskedPhone'
 import { formatDate, initials } from '@/lib/format'
 import type { RenewalSuggestion } from './types'
 
@@ -67,15 +66,9 @@ export function useSuggestionColumns(
         header: 'Joined',
         cell: (info) => formatDate(info.getValue()),
       }),
-      columnHelper.accessor('activityUnknown', {
-        header: 'Activity',
-        cell: () => (
-          <Badge variant="outline" className="gap-1 text-muted-foreground">
-            <HelpCircle className="size-3" />
-            Activity: unknown
-          </Badge>
-        ),
-        enableSorting: false,
+      columnHelper.accessor('lastMessageAt', {
+        header: ActivityColumnHeader,
+        cell: (info) => <MessageActivityBadge lastMessageAt={info.getValue()} />,
       }),
     ],
     [selected, onToggle],

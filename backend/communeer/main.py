@@ -16,6 +16,7 @@ from communeer.db import SessionLocal
 from communeer.errors import register_exception_handlers
 from communeer.groups.router import router as groups_router
 from communeer.members.router import router as members_router
+from communeer.moderation.router import router as moderation_router
 from communeer.providers.whatsapp import get_provider
 from communeer.providers.whatsapp.base import (
     WhatsAppConnectionState,
@@ -24,6 +25,7 @@ from communeer.providers.whatsapp.base import (
 from communeer.renewals.router import router as renewals_router
 from communeer.sync.router import router as sync_router
 from communeer.sync.service import sync_community
+from communeer.webhooks.router import router as webhooks_router
 from communeer.whatsapp_status.router import router as whatsapp_status_router
 
 # Without this, `logger.exception(...)` calls throughout this codebase
@@ -115,6 +117,13 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
 
+    @app.get("/health")
+    def health() -> dict:
+        """Unauthenticated liveness probe for Docker's `healthcheck:` — every
+        real API route lives under `/api/v1` and requires a session, so this
+        exists purely so the container orchestrator has something to poll."""
+        return {"status": "ok"}
+
     api_prefix = "/api/v1"
     app.include_router(auth_router, prefix=api_prefix)
     app.include_router(communities_router, prefix=api_prefix)
@@ -124,6 +133,8 @@ def create_app() -> FastAPI:
     app.include_router(sync_router, prefix=api_prefix)
     app.include_router(whatsapp_status_router, prefix=api_prefix)
     app.include_router(renewals_router, prefix=api_prefix)
+    app.include_router(webhooks_router, prefix=api_prefix)
+    app.include_router(moderation_router, prefix=api_prefix)
 
     return app
 

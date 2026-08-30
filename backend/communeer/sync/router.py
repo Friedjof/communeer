@@ -9,16 +9,26 @@ from communeer.communities.service import (
     get_community_admin_count,
     get_community_pending_request_count,
 )
-from communeer.deps import get_current_user, get_db, get_provider
-from communeer.errors import bad_request
-from communeer.models import User
-from communeer.providers.whatsapp.base import WhatsAppProvider
-from communeer.sync.service import CommunityNotFoundError, sync_community
+from communeer.deps import get_current_user, get_db, get_provider, require_role
+from communeer.errors import bad_request, conflict, service_unavailable
+from communeer.models import User, UserRole
+from communeer.providers.whatsapp.base import (
+    WhatsAppProvider,
+    WhatsAppProviderUnavailableError,
+)
+from communeer.sync.service import (
+    CommunityNotFoundError,
+    SyncInProgressError,
+    sync_community,
+)
 
 router = APIRouter(tags=["sync"], dependencies=[Depends(get_current_user)])
 
 
-@router.post("/communities/{community_id}/sync")
+@router.post(
+    "/communities/{community_id}/sync",
+    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+)
 def sync_community_route(
     community_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -30,6 +40,10 @@ def sync_community_route(
         synced = sync_community(db, provider, community.wa_id, actor_user_id=user.id)
     except CommunityNotFoundError as exc:
         raise bad_request(f"Provider has no community with wa_id={exc!s}") from exc
+    except WhatsAppProviderUnavailableError as exc:
+        raise service_unavailable("WhatsApp service is unreachable right now. Please try again shortly.") from exc
+    except SyncInProgressError as exc:
+        raise conflict("A sync for this community is already in progress — please try again shortly.") from exc
 
     out = CommunityDetailOut(
         id=synced.id,

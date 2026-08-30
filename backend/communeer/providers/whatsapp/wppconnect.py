@@ -10,6 +10,16 @@ by an explicit user action (the "Discover communities" / per-community
 side effects, and it is the one method on this provider that's safe for a
 caller (e.g. the frontend, via `/whatsapp/status`) to poll frequently.
 
+Per-group request cost, updated: `_build_memberships()` makes exactly three
+calls per group now (`group-members`, `group-admins`, and one
+`get-messages/{group_wa_id}?count=100` to derive `last_message_at` per
+author) — still one flat cost per group, not per member. Deliberately does
+**not** call `last-seen`/`chat-is-online` per member for `last_seen_at`:
+verified live against real group members, both endpoints return no data for
+essentially every account (WhatsApp's own presence-privacy defaults), so
+that would be one wasted request per person for data that's virtually never
+there. `last_seen_at` stays `None` from this provider.
+
 **Central, explicitly unverified hypothesis** (see
 `poc/whatsapp/FINDINGS.md` and the plan this module was built from): the
 non-deprecated `POST /api/{session}/list-chats` endpoint (called with
@@ -41,7 +51,7 @@ happens to use — see `_find_own_wa_id` below.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -55,6 +65,7 @@ from communeer.providers.whatsapp.base import (
     WhatsAppConnectionStatus,
     WhatsAppNotConnectedError,
     WhatsAppProvider,
+    WhatsAppProviderUnavailableError,
 )
 
 # The endpoint used to list groups. `all-groups` is documented as deprecated
@@ -79,6 +90,14 @@ _STATUS_CONNECTED = {"CONNECTED"}
 # settings, so hardcoding them is legitimate — unlike guessing `size` was.
 _REGULAR_GROUP_MEMBER_LIMIT = 1024
 _ANNOUNCEMENT_GROUP_MEMBER_LIMIT = 2000
+
+
+class _LastMessage(NamedTuple):
+    """One author's most recent real chat message, as parsed from
+    `get-messages` — see `WppconnectProvider._fetch_last_message_by_author`."""
+
+    at: datetime
+    content: str | None
 
 
 def _mask_digits(digits: str) -> str:
@@ -162,6 +181,24 @@ def _unwrap_list_response(body: Any) -> list:
     return []
 
 
+def _safe_error_detail(exc: Exception) -> str:
+    """A detail string safe to return to any authenticated user (this is what
+    `get_connection_status()` puts in `WhatsAppConnectionStatus.detail`,
+    which `GET /whatsapp/status` returns to every logged-in role, including
+    `viewer` — no role check there, deliberately) or to embed in a raised
+    `WhatsAppProviderUnavailableError`.
+
+    Deliberately NEVER uses `str(exc)`: `httpx.HTTPStatusError` (and some
+    other `httpx.HTTPError` subclasses) embed the full request URL in their
+    message, and `_ensure_token()` above embeds `self._secret_key` directly
+    in that URL (`/api/{session}/{secret_key}/generate-token`) — so the raw
+    exception text can leak `WPPCONNECT_SECRET_KEY` in plaintext to whoever
+    reads the response. A generic, exception-type-only message carries
+    enough signal for a caller/log without ever risking that.
+    """
+    return f"{type(exc).__name__}: request to WhatsApp provider failed"
+
+
 def _flatten_participant_list(items: list) -> list[dict]:
     """`group-admins` was confirmed against a real account to nest its
     result one level deeper than `group-members` does — `{"response":
@@ -232,10 +269,10 @@ class WppconnectProvider(WhatsAppProvider):
             resp.raise_for_status()
             body = resp.json()
         except httpx.HTTPError as exc:
-            return WhatsAppConnectionStatus(state=WhatsAppConnectionState.error, detail=str(exc))
+            return WhatsAppConnectionStatus(state=WhatsAppConnectionState.error, detail=_safe_error_detail(exc))
         except (ValueError, KeyError, TypeError) as exc:
             # Defensive: malformed/non-JSON response body, unexpected shape.
-            return WhatsAppConnectionStatus(state=WhatsAppConnectionState.error, detail=str(exc))
+            return WhatsAppConnectionStatus(state=WhatsAppConnectionState.error, detail=_safe_error_detail(exc))
 
         raw_status = body.get("status") if isinstance(body, dict) else None
 
@@ -268,23 +305,41 @@ class WppconnectProvider(WhatsAppProvider):
         `WhatsAppProvider` — `MockWhatsAppProvider` has no session concept,
         and a fake no-op on the shared ABC would mask real bugs. The
         `whatsapp_status` router calls this only when it knows (via
-        `isinstance`) that it's talking to this concrete provider."""
-        resp = self._authed_request(
-            "POST",
-            f"/api/{self._session_name}/start-session",
-            json={"waitQrCode": False},
-        )
-        resp.raise_for_status()
+        `isinstance`) that it's talking to this concrete provider.
+
+        Raises `WhatsAppProviderUnavailableError` (instead of letting an
+        `httpx` exception propagate) so the router can turn an unreachable/
+        hung WPPConnect server into a fast, honest error response rather
+        than a silent wait for the HTTP client timeout followed by a
+        generic 500.
+        """
+        try:
+            resp = self._authed_request(
+                "POST",
+                f"/api/{self._session_name}/start-session",
+                json={"waitQrCode": False},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
 
     # -- group/community listing --------------------------------------------
 
     def _fetch_groups_raw(self) -> list[dict]:
-        resp = self._authed_request(
-            "POST",
-            _LIST_CHATS_PATH_TEMPLATE.format(session=self._session_name),
-            json={"onlyGroups": True},
-        )
-        resp.raise_for_status()
+        """Raises `WhatsAppProviderUnavailableError` (instead of letting a raw
+        `httpx.HTTPError` propagate) on a WPPConnect transport failure — same
+        posture as `start_session()` above, so a `list-chats` 500/timeout
+        surfaces as a fast, honest 503 at the router layer instead of an
+        unhelpful generic 500."""
+        try:
+            resp = self._authed_request(
+                "POST",
+                _LIST_CHATS_PATH_TEMPLATE.format(session=self._session_name),
+                json={"onlyGroups": True},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
         return _unwrap_list_response(resp.json())
 
     @staticmethod
@@ -358,23 +413,86 @@ class WppconnectProvider(WhatsAppProvider):
             raw=meta,
         )
 
-    def _build_memberships(self, group_wa_id: str, pending_ids: set[str]) -> list[ProviderMembership]:
-        members_resp = self._authed_request(
-            "GET", f"/api/{self._session_name}/group-members/{group_wa_id}"
-        )
-        members_resp.raise_for_status()
-        raw_members = _unwrap_list_response(members_resp.json())
+    def _fetch_last_message_by_author(self, group_wa_id: str) -> dict[str, _LastMessage]:
+        """One `get-messages` call per group, giving the last real message
+        (timestamp + body) for every author who wrote one among the last 100
+        fetched — this is the actual chat history, parsed at sync time, and
+        feeds both the legacy `last_message_at` field and the unified
+        `last_activity_*` fields (type always `"message"` here; `reaction`/
+        `view` never come from this history-based path, only from the live
+        webhook — see `ProviderMembership.last_activity_type`'s docstring).
 
-        admins_resp = self._authed_request(
-            "GET", f"/api/{self._session_name}/group-admins/{group_wa_id}"
-        )
-        admins_resp.raise_for_status()
-        raw_admins = _flatten_participant_list(_unwrap_list_response(admins_resp.json()))
+        Confirmed against a real group: `type == "chat"` marks an actual
+        user-written text message; other values (`"gp2"`, etc.) are
+        system/notification events (joins, etc.) and must be excluded. `t`
+        is a Unix timestamp (seconds). `author` was observed as a plain
+        string JID in the live test, but this reuses `_jid_str` (rather than
+        assuming the plain-string shape) since this codebase's own
+        experience is that WPPConnect fields are inconsistently shaped
+        across endpoints. An author with no `"chat"` messages in the fetched
+        window simply doesn't appear in the returned mapping — callers must
+        treat a missing key as "unknown", not as an error.
+        """
+        try:
+            resp = self._authed_request(
+                "GET",
+                f"/api/{self._session_name}/get-messages/{group_wa_id}",
+                params={"count": 100},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
+        raw_messages = _unwrap_list_response(resp.json())
+
+        last_message: dict[str, _LastMessage] = {}
+        for message in raw_messages:
+            if not isinstance(message, dict):
+                continue
+            if message.get("type") != "chat":
+                continue
+            author = self._jid_str(message.get("author"))
+            if not author:
+                continue
+            raw_t = message.get("t")
+            if not isinstance(raw_t, (int, float)):
+                continue
+            timestamp = datetime.fromtimestamp(raw_t, tz=UTC)
+            existing = last_message.get(author)
+            if existing is None or timestamp > existing.at:
+                body = message.get("body")
+                content = body if isinstance(body, str) else None
+                # Matches `webhooks/router.py`'s `_ACTIVITY_CONTENT_MAX_LEN`
+                # (200) — same field, same limit, kept independent constants
+                # rather than a shared import since these two modules are
+                # otherwise unrelated.
+                if content is not None and len(content) > 200:
+                    content = content[:200]
+                last_message[author] = _LastMessage(at=timestamp, content=content)
+
+        return last_message
+
+    def _build_memberships(self, group_wa_id: str, pending_ids: set[str]) -> list[ProviderMembership]:
+        try:
+            members_resp = self._authed_request(
+                "GET", f"/api/{self._session_name}/group-members/{group_wa_id}"
+            )
+            members_resp.raise_for_status()
+            raw_members = _unwrap_list_response(members_resp.json())
+
+            admins_resp = self._authed_request(
+                "GET", f"/api/{self._session_name}/group-admins/{group_wa_id}"
+            )
+            admins_resp.raise_for_status()
+            raw_admins = _flatten_participant_list(_unwrap_list_response(admins_resp.json()))
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
         admin_ids: set[str] = set()
         for admin in raw_admins:
             admin_id = _participant_id(admin)
             if admin_id:
                 admin_ids.add(admin_id)
+
+        last_message_by_author = self._fetch_last_message_by_author(group_wa_id)
 
         memberships: list[ProviderMembership] = []
         for participant in raw_members:
@@ -407,6 +525,7 @@ class WppconnectProvider(WhatsAppProvider):
                 first_seen_at=datetime.now(UTC),
                 raw=participant,
             )
+            last_message = last_message_by_author.get(member_id)
             memberships.append(
                 ProviderMembership(
                     member=member,
@@ -418,6 +537,20 @@ class WppconnectProvider(WhatsAppProvider):
                     is_super_admin=False,
                     status="pending" if member_id in pending_ids else "member",
                     joined_at=None,
+                    last_message_at=last_message.at if last_message else None,
+                    last_seen_at=None,
+                    # Real chat history, parsed at sync time — this is what
+                    # was missing before: `last_activity_*` used to be
+                    # populated *only* by the live webhook, so it stayed
+                    # `None` for every member until a fresh message arrived
+                    # after the webhook was wired up, no matter how much real
+                    # history already existed. Forward-only stamping in
+                    # `sync/service.py` still protects a newer webhook-set
+                    # reaction from being clobbered by an older backfilled
+                    # message on a later sync.
+                    last_activity_type="message" if last_message else None,
+                    last_activity_at=last_message.at if last_message else None,
+                    last_activity_content=last_message.content if last_message else None,
                 )
             )
 
@@ -639,3 +772,29 @@ class WppconnectProvider(WhatsAppProvider):
                 admin_wa_ids.add(root_wa_id)
 
         return admin_wa_ids
+
+    def get_group_invite_link(self, group_wa_id: str) -> str | None:
+        """See `WhatsAppProvider.get_group_invite_link` for the contract.
+
+        Confirmed live against a real connected account: `GET
+        /api/{session}/group-invite-link/{group_wa_id}` returns
+        `{"status": "success", "response": "https://chat.whatsapp.com/..."}`
+        on success. A group the connected account can't generate a link for
+        (observed live: fails for at least one real group, cause
+        unconfirmed — possibly non-admin standing or links disabled there)
+        returns `{"status": "error", ...}` with a 500 — treated the same as
+        a transport failure, never raised.
+        """
+        try:
+            resp = self._authed_request(
+                "GET", f"/api/{self._session_name}/group-invite-link/{group_wa_id}"
+            )
+            resp.raise_for_status()
+            body = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+
+        if not isinstance(body, dict) or body.get("status") != "success":
+            return None
+        link = body.get("response")
+        return link if isinstance(link, str) and link else None

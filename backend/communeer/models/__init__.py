@@ -8,7 +8,8 @@ from communeer.models.base import Base
 from communeer.models.community import Community
 from communeer.models.group import Group
 from communeer.models.member import Member
-from communeer.models.membership import GroupMembership, MembershipStatus
+from communeer.models.membership import ActivityType, GroupMembership, MembershipStatus
+from communeer.models.moderation import ModerationDismissal
 from communeer.models.renewal import (
     RenewalCampaign,
     RenewalConfirmation,
@@ -18,6 +19,7 @@ from communeer.models.snapshot import CommunityMemberSnapshot, GroupMemberSnapsh
 from communeer.models.user import User, UserRole
 
 __all__ = [
+    "ActivityType",
     "AuditEvent",
     "Base",
     "Community",
@@ -27,6 +29,7 @@ __all__ = [
     "GroupMembership",
     "Member",
     "MembershipStatus",
+    "ModerationDismissal",
     "RenewalCampaign",
     "RenewalConfirmation",
     "RenewalConfirmationStatus",

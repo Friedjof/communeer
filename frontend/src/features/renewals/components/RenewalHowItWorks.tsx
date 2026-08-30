@@ -15,7 +15,7 @@ const STEPS: Step[] = [
     actor: 'communeer',
     title: 'Select members to include',
     description:
-      'Pick candidates from the suggestion list below (already excludes every admin) and start a round.',
+      'Pick candidates from the suggestion list below (already excludes every admin) and start a round. Members who’ve never posted a message are listed first — a real signal, not a guess.',
   },
   {
     actor: 'whatsapp',

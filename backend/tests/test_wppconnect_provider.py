@@ -6,12 +6,17 @@ logic is correct *given* that shape — they do not (and cannot) prove the
 hypothesis itself holds against a real WPPConnect Server.
 """
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 import respx
 
 from communeer.config import Settings
-from communeer.providers.whatsapp.base import WhatsAppNotConnectedError
+from communeer.providers.whatsapp.base import (
+    WhatsAppNotConnectedError,
+    WhatsAppProviderUnavailableError,
+)
 from communeer.providers.whatsapp.wppconnect import WppconnectProvider
 
 BASE_URL = "http://wppconnect-test:21465"
@@ -56,6 +61,14 @@ def _group_members_url(wa_id: str) -> str:
 
 def _group_admins_url(wa_id: str) -> str:
     return f"{BASE_URL}/api/{SESSION}/group-admins/{wa_id}"
+
+
+def _get_messages_url(wa_id: str) -> str:
+    return f"{BASE_URL}/api/{SESSION}/get-messages/{wa_id}"
+
+
+def _start_session_url() -> str:
+    return f"{BASE_URL}/api/{SESSION}/start-session"
 
 
 def _mock_token_and_connected(respx_mock) -> None:
@@ -134,6 +147,12 @@ def test_get_communities_happy_path_builds_expected_tree():
         ],
     )
     respx.mock.get(_group_admins_url(GENERAL_WA_ID)).respond(200, json=[])
+    respx.mock.get(_get_messages_url(ANNOUNCEMENTS_WA_ID)).respond(
+        200, json={"status": "success", "response": []}
+    )
+    respx.mock.get(_get_messages_url(GENERAL_WA_ID)).respond(
+        200, json={"status": "success", "response": []}
+    )
 
     provider = _provider()
     communities = provider.get_communities()
@@ -167,6 +186,186 @@ def test_get_communities_happy_path_builds_expected_tree():
     assert memberships_by_wa_id[MEMBER_JID].is_admin is False
     # phone masking applied even without a pushname
     assert memberships_by_wa_id[PENDING_MEMBER_JID].member.display_name.startswith("+")
+
+
+@respx.mock
+def test_get_messages_filters_non_chat_types_and_aggregates_last_message_at_per_author():
+    """`get-messages` is fetched once per group; only `type == "chat"` rows
+    are real user-written messages — others (e.g. `"gp2"`, a system/
+    notification event like a join) must be excluded. `last_message_at` per
+    author is the max `t` among their `"chat"` messages only, converted to a
+    timezone-aware UTC `datetime`. Mirrors the real shape confirmed live:
+    `author` is a plain string JID (not the `{"id": ...}` wrapper
+    `group-members`/`group-admins` use)."""
+    _mock_token_and_connected(respx.mock)
+
+    author_a = "124193425358871@lid"
+    author_b = "133139942899781@lid"
+
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(ROOT_WA_ID),
+                "subject": "Test Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+        {
+            "groupMetadata": {
+                "id": _jid(GENERAL_WA_ID),
+                "subject": "General",
+                "isParentGroup": False,
+                "parentGroup": _jid(ROOT_WA_ID),
+                "announce": False,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(GENERAL_WA_ID)).respond(
+        200,
+        json=[
+            {"id": {"_serialized": author_a}, "pushname": "Alice"},
+            {"id": {"_serialized": author_b}, "pushname": "Bob"},
+        ],
+    )
+    respx.mock.get(_group_admins_url(GENERAL_WA_ID)).respond(200, json=[])
+    respx.mock.get(_get_messages_url(GENERAL_WA_ID)).respond(
+        200,
+        json={
+            "status": "success",
+            "response": [
+                {"id": "1", "type": "chat", "t": 1787587079, "author": author_a, "body": "Hii I'm looking for..."},
+                # a later timestamp, but not a real chat message — must be excluded.
+                {"id": "2", "type": "gp2", "t": 1787999999, "author": author_a, "body": "joined the group"},
+                {"id": "3", "type": "chat", "t": 1787500000, "author": author_a, "body": "an earlier message"},
+                {"id": "4", "type": "chat", "t": 1787633724, "author": author_b, "body": "+1"},
+            ],
+        },
+    )
+
+    provider = _provider()
+    group = provider.get_group(GENERAL_WA_ID)
+
+    memberships_by_author = {m.member.wa_id: m for m in group.memberships}
+
+    assert memberships_by_author[author_a].last_message_at == datetime.fromtimestamp(1787587079, tz=UTC)
+    assert memberships_by_author[author_b].last_message_at == datetime.fromtimestamp(1787633724, tz=UTC)
+    # `last_seen_at` is never populated by this provider (see wppconnect.py).
+    assert memberships_by_author[author_a].last_seen_at is None
+    assert memberships_by_author[author_b].last_seen_at is None
+
+    # Real chat history must also feed the unified `last_activity_*` fields
+    # (previously these were only ever set by the live webhook, so existing
+    # history was invisible to them — this is exactly that gap, fixed).
+    assert memberships_by_author[author_a].last_activity_type == "message"
+    assert memberships_by_author[author_a].last_activity_at == datetime.fromtimestamp(1787587079, tz=UTC)
+    assert memberships_by_author[author_a].last_activity_content == "Hii I'm looking for..."
+    assert memberships_by_author[author_b].last_activity_type == "message"
+    assert memberships_by_author[author_b].last_activity_content == "+1"
+
+
+@respx.mock
+def test_get_messages_truncates_long_body_for_last_activity_content():
+    """A message body longer than 200 characters must be truncated for
+    `last_activity_content` — matches `webhooks/router.py`'s
+    `_ACTIVITY_CONTENT_MAX_LEN`, same field, same limit."""
+    _mock_token_and_connected(respx.mock)
+
+    author = "124193425358871@lid"
+    long_body = "x" * 250
+
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(ROOT_WA_ID),
+                "subject": "Test Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+        {
+            "groupMetadata": {
+                "id": _jid(GENERAL_WA_ID),
+                "subject": "General",
+                "isParentGroup": False,
+                "parentGroup": _jid(ROOT_WA_ID),
+                "announce": False,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(GENERAL_WA_ID)).respond(
+        200, json=[{"id": {"_serialized": author}, "pushname": "Alice"}]
+    )
+    respx.mock.get(_group_admins_url(GENERAL_WA_ID)).respond(200, json=[])
+    respx.mock.get(_get_messages_url(GENERAL_WA_ID)).respond(
+        200,
+        json={"status": "success", "response": [{"id": "1", "type": "chat", "t": 1787587079, "author": author, "body": long_body}]},
+    )
+
+    provider = _provider()
+    group = provider.get_group(GENERAL_WA_ID)
+
+    membership = next(m for m in group.memberships if m.member.wa_id == author)
+    assert membership.last_activity_content == "x" * 200
+    assert len(membership.last_activity_content) == 200
+
+
+@respx.mock
+def test_get_messages_author_with_no_chat_messages_gets_none_not_zero():
+    """An author present in the roster but absent from the fetched
+    `get-messages` window (or only present via non-`"chat"` rows) must get
+    `last_message_at=None` — never `0`/epoch, never an exception."""
+    _mock_token_and_connected(respx.mock)
+
+    silent_author = "111111111111111@lid"
+
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(ROOT_WA_ID),
+                "subject": "Test Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+        {
+            "groupMetadata": {
+                "id": _jid(GENERAL_WA_ID),
+                "subject": "General",
+                "isParentGroup": False,
+                "parentGroup": _jid(ROOT_WA_ID),
+                "announce": False,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(GENERAL_WA_ID)).respond(
+        200, json=[{"id": {"_serialized": silent_author}, "pushname": "Silent"}]
+    )
+    respx.mock.get(_group_admins_url(GENERAL_WA_ID)).respond(200, json=[])
+    respx.mock.get(_get_messages_url(GENERAL_WA_ID)).respond(
+        200,
+        json={
+            "status": "success",
+            "response": [
+                {"id": "1", "type": "gp2", "t": 1787999999, "author": silent_author, "body": "joined"},
+            ],
+        },
+    )
+
+    provider = _provider()
+    group = provider.get_group(GENERAL_WA_ID)
+
+    membership = next(m for m in group.memberships if m.member.wa_id == silent_author)
+    assert membership.last_message_at is None
+    assert membership.last_activity_type is None
+    assert membership.last_activity_at is None
+    assert membership.last_activity_content is None
 
 
 @respx.mock
@@ -379,4 +578,184 @@ def test_get_connection_status_never_raises_on_transport_error():
 
     assert status.state.value == "error"
     assert status.detail is not None
-    assert "connection refused" in status.detail
+    # `status-session` itself never embeds the secret (only `generate-token`'s
+    # own URL does), so the exception's own type name is expected to appear;
+    # what must never appear, on any failure path, is the secret itself (see
+    # the dedicated leak test below) — asserting the exact raw exception text
+    # would be the wrong thing to lock in now that `_safe_error_detail`
+    # deliberately replaces it with a generic message.
+    assert status.detail == "ConnectError: request to WhatsApp provider failed"
+    assert SECRET_KEY not in status.detail
+
+
+@respx.mock
+def test_get_connection_status_does_not_leak_secret_key_on_generate_token_failure():
+    """The actual bug this guards against: `_ensure_token()` embeds
+    `self._secret_key` directly in the `generate-token` request URL
+    (`/api/{session}/{secret_key}/generate-token`). `httpx.HTTPStatusError`
+    (raised by `raise_for_status()`) embeds the full request URL in its own
+    `str()` — so if `get_connection_status()` ever went back to using
+    `str(exc)` verbatim, a failing `generate-token` call would leak
+    `WPPCONNECT_SECRET_KEY` in plaintext into `detail`, which `GET
+    /whatsapp/status` returns to every authenticated user, including
+    `viewer`."""
+    respx.mock.post(_generate_token_url()).respond(500, json={"error": "boom"})
+
+    provider = _provider()
+    status = provider.get_connection_status()
+
+    assert status.state.value == "error"
+    assert status.detail is not None
+    assert SECRET_KEY not in status.detail
+    assert _generate_token_url() not in status.detail
+    assert status.detail == "HTTPStatusError: request to WhatsApp provider failed"
+
+
+@respx.mock
+def test_start_session_raises_provider_unavailable_on_transport_error():
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.post(_start_session_url()).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    provider = _provider()
+
+    with pytest.raises(WhatsAppProviderUnavailableError):
+        provider.start_session()
+
+
+@respx.mock
+def test_start_session_succeeds_when_wppconnect_is_reachable():
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.post(_start_session_url()).respond(200, json={"status": "success"})
+
+    provider = _provider()
+
+    provider.start_session()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Consistent httpx-error translation: get_communities/get_community/get_group/
+# get_members (and their internal _fetch_groups_raw/_build_memberships/
+# _fetch_last_message_by_author helpers) must translate a transport failure
+# into WhatsAppProviderUnavailableError, exactly like start_session() already
+# does — instead of letting a raw httpx.HTTPError propagate to a generic 500.
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_get_communities_raises_provider_unavailable_on_list_chats_failure():
+    _mock_token_and_connected(respx.mock)
+    respx.mock.post(_list_chats_url()).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    provider = _provider()
+    with pytest.raises(WhatsAppProviderUnavailableError):
+        provider.get_communities()
+
+
+@respx.mock
+def test_get_group_raises_provider_unavailable_on_group_members_failure():
+    _mock_token_and_connected(respx.mock)
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(ROOT_WA_ID),
+                "subject": "Test Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+        {
+            "groupMetadata": {
+                "id": _jid(GENERAL_WA_ID),
+                "subject": "General",
+                "isParentGroup": False,
+                "parentGroup": _jid(ROOT_WA_ID),
+                "announce": False,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(GENERAL_WA_ID)).respond(500, json={"error": "boom"})
+
+    provider = _provider()
+    with pytest.raises(WhatsAppProviderUnavailableError):
+        provider.get_group(GENERAL_WA_ID)
+
+
+@respx.mock
+def test_get_members_raises_provider_unavailable_on_get_messages_failure():
+    """`_fetch_last_message_by_author` (called from within `_build_memberships`
+    after `group-members`/`group-admins` succeed) must translate its own
+    transport failure the same way."""
+    _mock_token_and_connected(respx.mock)
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(ROOT_WA_ID),
+                "subject": "Test Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+        {
+            "groupMetadata": {
+                "id": _jid(GENERAL_WA_ID),
+                "subject": "General",
+                "isParentGroup": False,
+                "parentGroup": _jid(ROOT_WA_ID),
+                "announce": False,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(GENERAL_WA_ID)).respond(
+        200, json=[{"id": {"_serialized": MEMBER_JID}, "pushname": "Alice"}]
+    )
+    respx.mock.get(_group_admins_url(GENERAL_WA_ID)).respond(200, json=[])
+    respx.mock.get(_get_messages_url(GENERAL_WA_ID)).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    provider = _provider()
+    with pytest.raises(WhatsAppProviderUnavailableError):
+        provider.get_members(GENERAL_WA_ID)
+
+
+def _group_invite_link_url(wa_id: str) -> str:
+    return f"{BASE_URL}/api/{SESSION}/group-invite-link/{wa_id}"
+
+
+@respx.mock
+def test_get_group_invite_link_returns_link_on_success():
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.get(_group_invite_link_url(GENERAL_WA_ID)).respond(
+        200, json={"status": "success", "response": "https://chat.whatsapp.com/ABC123"}
+    )
+
+    provider = _provider()
+
+    assert provider.get_group_invite_link(GENERAL_WA_ID) == "https://chat.whatsapp.com/ABC123"
+
+
+@respx.mock
+def test_get_group_invite_link_returns_none_on_wppconnect_error_status():
+    """A real, observed live failure mode: WPPConnect returns a 500 with
+    `{"status": "error", ...}` for a group the connected account can't
+    generate a link for — never raised, degrades to `None`."""
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.get(_group_invite_link_url(GENERAL_WA_ID)).respond(
+        500, json={"status": "error", "message": "Error on get group invite link"}
+    )
+
+    provider = _provider()
+
+    assert provider.get_group_invite_link(GENERAL_WA_ID) is None
+
+
+@respx.mock
+def test_get_group_invite_link_returns_none_on_transport_error():
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.get(_group_invite_link_url(GENERAL_WA_ID)).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    provider = _provider()
+
+    assert provider.get_group_invite_link(GENERAL_WA_ID) is None

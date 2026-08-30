@@ -8,7 +8,7 @@ import {
   type LegacyColumnDef as ColumnDef,
   useLegacyTable as useReactTable,
 } from '@tanstack/react-table/legacy'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Columns3, Search } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Columns3, Download, Search } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,8 +18,17 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { EmptyState } from '@/components/feedback/EmptyState'
+import { downloadCsv, toCsv } from '@/lib/csv'
+
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 250]
+
+interface DataTableExportColumn<TData> {
+  header: string
+  value: (row: TData) => string | number | null | undefined
+}
 
 interface DataTableProps<TData extends RowData> {
   data: TData[]
@@ -36,6 +45,8 @@ interface DataTableProps<TData extends RowData> {
   initialSorting?: SortingState
   initialColumnVisibility?: ColumnVisibilityState
   pageSize?: number
+  exportFileName?: string
+  exportColumns?: DataTableExportColumn<TData>[]
 }
 
 export function DataTable<TData extends RowData>({
@@ -46,7 +57,9 @@ export function DataTable<TData extends RowData>({
   onRowClick,
   initialSorting = [],
   initialColumnVisibility = {},
-  pageSize = 20,
+  pageSize = 50,
+  exportFileName = 'export.csv',
+  exportColumns,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting)
   const [globalFilter, setGlobalFilter] = useState('')
@@ -68,7 +81,18 @@ export function DataTable<TData extends RowData>({
 
   const rows = table.getRowModel().rows
   const pageIndex = table.getState().pagination.pageIndex
+  const pageSizeState = table.getState().pagination.pageSize
   const pageCount = table.getPageCount()
+
+  function handleExport() {
+    if (!exportColumns || exportColumns.length === 0) return
+    const filteredRows = table.getFilteredRowModel().rows.map((row) => row.original)
+    const csvColumns = exportColumns.map((column, index) => ({ key: String(index), header: column.header }))
+    const records = filteredRows.map((row) =>
+      Object.fromEntries(exportColumns.map((column, index) => [String(index), column.value(row) ?? ''])),
+    )
+    downloadCsv(exportFileName, toCsv(records, csvColumns))
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -82,29 +106,37 @@ export function DataTable<TData extends RowData>({
             className="pl-8"
           />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="ml-auto gap-1.5">
-              <Columns3 className="size-4" />
-              Columns
+        <div className="ml-auto flex items-center gap-2">
+          {exportColumns && exportColumns.length > 0 ? (
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExport} disabled={data.length === 0}>
+              <Download className="size-4" />
+              Export CSV
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {table
-              .getAllLeafColumns()
-              .filter((column) => column.getCanHide())
-              .map((column) => (
-                <DropdownMenuCheckboxItem
-                  key={column.id}
-                  checked={column.getIsVisible()}
-                  onCheckedChange={(value) => column.toggleVisibility(!!value)}
-                  onSelect={(event) => event.preventDefault()}
-                >
-                  {typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id}
-                </DropdownMenuCheckboxItem>
-              ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Columns3 className="size-4" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {table
+                .getAllLeafColumns()
+                .filter((column) => column.getCanHide())
+                .map((column) => (
+                  <DropdownMenuCheckboxItem
+                    key={column.id}
+                    checked={column.getIsVisible()}
+                    onCheckedChange={(value) => column.toggleVisibility(!!value)}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id}
+                  </DropdownMenuCheckboxItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-lg border">
@@ -171,6 +203,21 @@ export function DataTable<TData extends RowData>({
             {table.getFilteredRowModel().rows.length} row{table.getFilteredRowModel().rows.length === 1 ? '' : 's'}
           </span>
           <div className="flex items-center gap-2">
+            <Select
+              value={String(pageSizeState)}
+              onValueChange={(value) => table.setPageSize(Number(value))}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[110px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <SelectItem key={size} value={String(size)}>
+                    {size} / page
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <span>
               Page {pageIndex + 1} of {Math.max(pageCount, 1)}
             </span>
@@ -178,6 +225,7 @@ export function DataTable<TData extends RowData>({
               variant="outline"
               size="icon"
               className="size-8"
+              aria-label="Previous page"
               onClick={() => table.previousPage()}
               disabled={!table.getCanPreviousPage()}
             >
@@ -187,6 +235,7 @@ export function DataTable<TData extends RowData>({
               variant="outline"
               size="icon"
               className="size-8"
+              aria-label="Next page"
               onClick={() => table.nextPage()}
               disabled={!table.getCanNextPage()}
             >
@@ -199,4 +248,4 @@ export function DataTable<TData extends RowData>({
   )
 }
 
-export type { ColumnDef }
+export type { ColumnDef, DataTableExportColumn }

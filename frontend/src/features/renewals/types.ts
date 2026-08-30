@@ -14,8 +14,20 @@ export interface RenewalSuggestion {
   phoneNumberMasked: string
   groupCount: number
   joinedAt: string | null
-  /** Always `true` today — there is no real activity signal behind this yet. */
-  activityUnknown: true
+  /**
+   * Last time this member actually posted a message, aggregated from real
+   * message history. `null` genuinely means "never posted" — a verified
+   * signal, not a placeholder.
+   */
+  lastMessageAt: string | null
+  /**
+   * Last known presence/read signal. Almost always `null` in practice —
+   * WhatsApp doesn't expose per-message read receipts or reliable presence
+   * data for most accounts (verified live against a real connected
+   * account). `null` here means "not available", a different reason than
+   * `lastMessageAt`'s `null` ("never posted").
+   */
+  lastSeenAt: string | null
 }
 
 /** Summary counters for one campaign, as returned by list/detail/create endpoints. */

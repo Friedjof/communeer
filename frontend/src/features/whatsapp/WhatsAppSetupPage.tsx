@@ -4,6 +4,7 @@ import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useSession } from '@/features/auth/queries'
 import { useConnectWhatsApp, useDiscoverAndSync, useWhatsAppStatus } from './queries'
 import type { WhatsAppConnectionState } from './types'
 
@@ -12,6 +13,8 @@ export function WhatsAppSetupPage() {
   const status = useWhatsAppStatus()
   const connect = useConnectWhatsApp()
   const discoverAndSync = useDiscoverAndSync()
+  const session = useSession()
+  const isViewer = session.data?.role === 'viewer'
 
   const connectError =
     connect.error instanceof ApiError ? connect.error.message : connect.error ? 'Something went wrong. Please try again.' : null
@@ -59,6 +62,7 @@ export function WhatsAppSetupPage() {
               onDiscover={handleDiscover}
               discoverPending={discoverAndSync.isPending}
               discoverError={discoverError}
+              isViewer={isViewer}
             />
           ) : null}
 
@@ -81,6 +85,7 @@ interface StatusBodyProps {
   onDiscover: () => void
   discoverPending: boolean
   discoverError: string | null
+  isViewer: boolean
 }
 
 function StatusBody({
@@ -93,6 +98,7 @@ function StatusBody({
   onDiscover,
   discoverPending,
   discoverError,
+  isViewer,
 }: StatusBodyProps) {
   if (state === 'disconnected' || state === 'error') {
     return (
@@ -108,9 +114,13 @@ function StatusBody({
             {connectError}
           </p>
         ) : null}
-        <Button className="w-full" onClick={onConnect} disabled={connectPending}>
+        <Button className="w-full gap-2" onClick={onConnect} disabled={connectPending || isViewer}>
+          {connectPending ? <Loader2 className="size-4 animate-spin" /> : null}
           {connectPending ? 'Connecting…' : 'Connect WhatsApp'}
         </Button>
+        {isViewer ? (
+          <p className="text-center text-sm text-muted-foreground">Your role doesn't have access to this.</p>
+        ) : null}
       </div>
     )
   }
@@ -151,9 +161,12 @@ function StatusBody({
           {discoverError}
         </p>
       ) : null}
-      <Button className="w-full" onClick={onDiscover} disabled={discoverPending}>
+      <Button className="w-full" onClick={onDiscover} disabled={discoverPending || isViewer}>
         {discoverPending ? 'Discovering…' : 'Discover communities'}
       </Button>
+      {isViewer ? (
+        <p className="text-center text-sm text-muted-foreground">Your role doesn't have access to this.</p>
+      ) : null}
     </div>
   )
 }

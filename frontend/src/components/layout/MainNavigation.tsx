@@ -1,7 +1,8 @@
 import { Link } from '@tanstack/react-router'
-import { LayoutDashboard, ScrollText, Settings, UserCheck, Users } from 'lucide-react'
+import { LayoutDashboard, ScrollText, Settings, ShieldAlert, UserCheck, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/lib/uiStore'
+import { useSession } from '@/features/auth/queries'
 
 interface MainNavigationProps {
   communityId?: string
@@ -12,6 +13,8 @@ interface MainNavigationProps {
 export function MainNavigation({ communityId, className, onNavigate }: MainNavigationProps) {
   const persistedCommunityId = useUiStore((state) => state.selectedCommunityId)
   const activeCommunityId = communityId ?? persistedCommunityId ?? undefined
+  const session = useSession()
+  const isViewer = session.data?.role === 'viewer'
 
   const linkClass =
     'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[status=active]:bg-primary/10 data-[status=active]:text-primary'
@@ -48,12 +51,25 @@ export function MainNavigation({ communityId, className, onNavigate }: MainNavig
             <UserCheck className="size-4" />
             Renewals
           </Link>
+          {isViewer ? null : (
+            <Link
+              to="/c/$communityId/moderation"
+              params={{ communityId: activeCommunityId }}
+              className={linkClass}
+              onClick={onNavigate}
+            >
+              <ShieldAlert className="size-4" />
+              Moderation
+            </Link>
+          )}
         </>
       ) : null}
-      <Link to="/audit" className={linkClass} onClick={onNavigate}>
-        <ScrollText className="size-4" />
-        Audit log
-      </Link>
+      {isViewer ? null : (
+        <Link to="/audit" className={linkClass} onClick={onNavigate}>
+          <ScrollText className="size-4" />
+          Audit log
+        </Link>
+      )}
       <Link to="/settings" className={linkClass} onClick={onNavigate}>
         <Settings className="size-4" />
         Settings

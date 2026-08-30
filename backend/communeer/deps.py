@@ -1,4 +1,4 @@
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from communeer.auth.security import read_session_token
 from communeer.config import Settings, get_settings
 from communeer.db import SessionLocal
-from communeer.errors import unauthorized
-from communeer.models import User
+from communeer.errors import forbidden, unauthorized
+from communeer.models import User, UserRole
 from communeer.providers.whatsapp import get_provider as _get_provider
 from communeer.providers.whatsapp.base import WhatsAppProvider
 
@@ -48,3 +48,22 @@ def get_current_user(
         raise unauthorized()
 
     return user
+
+
+def require_role(*roles: UserRole) -> Callable[[User], User]:
+    """Dependency factory: `Depends(require_role(UserRole.owner, UserRole.admin))`
+    gates a route on the current user's stored `role`, on top of the
+    authentication `get_current_user` already performs.
+
+    Kept deliberately narrow — applied only to the specific routes that need
+    it (audit log, moderation queue) rather than swept across every endpoint,
+    so this doesn't become a breaking-change wave over unrelated routes that
+    have never needed role checks before.
+    """
+
+    def _check_role(user: User = Depends(get_current_user)) -> User:
+        if user.role not in roles:
+            raise forbidden("Your role does not have access to this resource.")
+        return user
+
+    return _check_role

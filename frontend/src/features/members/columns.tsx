@@ -1,10 +1,12 @@
 import { legacyCreateColumnHelper as createColumnHelper } from '@tanstack/react-table/legacy'
 import { ShieldCheck } from 'lucide-react'
+import { ActivityBar } from '@/components/data/ActivityBar'
+import { ActivityColumnHeader } from '@/components/data/MessageActivityCell'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { formatDate, initials } from '@/lib/format'
 import type { GroupMemberRow } from '../groups/types'
-import { MaskedPhone } from './MaskedPhone'
+import { MaskedPhone } from './components/MaskedPhone'
 import type { CommunityMemberRow } from './types'
 
 function IdentityCell({ avatarUrl, displayName, waId }: { avatarUrl: string | null; displayName: string; waId: string }) {
@@ -42,6 +44,19 @@ export const communityMemberColumns = [
   communityColumnHelper.accessor('joinedAt', {
     header: 'Joined',
     cell: (info) => formatDate(info.getValue()),
+  }),
+  communityColumnHelper.accessor('lastActivityAt', {
+    header: ActivityColumnHeader,
+    cell: (info) => {
+      const row = info.row.original
+      return (
+        <ActivityBar
+          lastActivityType={row.lastActivityType}
+          lastActivityAt={row.lastActivityAt}
+          lastActivityContent={row.lastActivityContent}
+        />
+      )
+    },
   }),
   communityColumnHelper.accessor('isCommunityAdmin', {
     header: 'Role',
@@ -81,6 +96,19 @@ export const groupMemberColumns = [
   groupColumnHelper.accessor('joinedAt', {
     header: 'Joined',
     cell: (info) => new Date(info.getValue()).toLocaleDateString(),
+  }),
+  groupColumnHelper.accessor('lastActivityAt', {
+    header: ActivityColumnHeader,
+    cell: (info) => {
+      const row = info.row.original
+      return (
+        <ActivityBar
+          lastActivityType={row.lastActivityType}
+          lastActivityAt={row.lastActivityAt}
+          lastActivityContent={row.lastActivityContent}
+        />
+      )
+    },
   }),
   groupColumnHelper.accessor('isSuperAdmin', {
     header: 'Role',

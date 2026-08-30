@@ -35,6 +35,9 @@ def get_member(member_id: uuid.UUID, db: Session = Depends(get_db)) -> MemberDet
             is_admin=membership.is_admin,
             status=membership.status,
             joined_at=membership.joined_at,
+            last_activity_type=membership.last_activity_type,
+            last_activity_at=membership.last_activity_at,
+            last_activity_content=membership.last_activity_content,
         )
         for membership, group, community in rows
     ]

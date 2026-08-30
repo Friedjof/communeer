@@ -1,6 +1,7 @@
 import { BarChart3 } from 'lucide-react'
 import { Bar, BarChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { TooltipContentProps } from 'recharts'
+import { ChartTooltipShell, TruncatingYAxisTick } from '@/components/charts/chart-primitives'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatDate, formatNumber } from '@/lib/format'
@@ -36,37 +37,7 @@ function buildRows(series: GroupHistorySeries[]): GroupGrowthRow[] {
     .sort((a, b) => b.growth - a.growth || b.currentMemberCount - a.currentMemberCount)
 }
 
-/** Truncates by Unicode code point (not UTF-16 code unit), so an emoji at
- * the cut point doesn't get split into a broken half-glyph — real group
- * names here often start with one (e.g. "🔒Unity α | Residents Only"). */
-function truncateLabel(name: string, maxCodePoints: number): string {
-  const chars = [...name]
-  if (chars.length <= maxCodePoints) return name
-  return `${chars.slice(0, maxCodePoints - 1).join('').trimEnd()}…`
-}
-
 const Y_AXIS_MAX_LABEL_CHARS = 16
-
-interface YAxisTickProps {
-  x?: number
-  y?: number
-  payload?: { value: string }
-}
-
-/** Recharts' default category-axis tick wraps long labels across multiple
- * lines within the fixed axis width, which collides with this chart's fixed
- * per-row bar height — real WhatsApp group names are frequently much longer
- * than the axis has room for. Render a single truncated line with an
- * ellipsis instead; the full name is still available via the bar's own
- * tooltip on hover. */
-function YAxisTick({ x = 0, y = 0, payload }: YAxisTickProps) {
-  if (!payload) return null
-  return (
-    <text x={x} y={y} dy={4} textAnchor="end" fontSize={12} fill="var(--muted-foreground)">
-      {truncateLabel(payload.value, Y_AXIS_MAX_LABEL_CHARS)}
-    </text>
-  )
-}
 
 interface GrowthBarShapeProps {
   x?: number
@@ -100,7 +71,7 @@ function GrowthTooltip({ active, payload }: TooltipContentProps) {
   if (!row) return null
   const sign = row.growth > 0 ? '+' : ''
   return (
-    <div className="rounded-lg border bg-popover px-3 py-2 text-sm shadow-md">
+    <ChartTooltipShell>
       <p className="font-medium">{row.groupName}</p>
       <p className="tabular-nums">
         {sign}
@@ -108,7 +79,7 @@ function GrowthTooltip({ active, payload }: TooltipContentProps) {
         {row.since ? ` since ${formatDate(row.since)}` : ' (only one sync recorded)'}
       </p>
       <p className="text-xs text-muted-foreground">{formatNumber(row.currentMemberCount)} members now</p>
-    </div>
+    </ChartTooltipShell>
   )
 }
 
@@ -172,7 +143,7 @@ export function GroupGrowthChart({ communityId }: GroupGrowthChartProps) {
               type="category"
               dataKey="groupName"
               width={130}
-              tick={<YAxisTick />}
+              tick={<TruncatingYAxisTick maxChars={Y_AXIS_MAX_LABEL_CHARS} />}
               axisLine={false}
               tickLine={false}
               interval={0}

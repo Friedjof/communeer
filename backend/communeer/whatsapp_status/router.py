@@ -8,15 +8,16 @@ from sqlalchemy.orm import Session
 
 from communeer.communities.router import _summary
 from communeer.communities.schemas import CommunitySummaryOut
-from communeer.deps import get_current_user, get_db, get_provider
-from communeer.errors import bad_request
-from communeer.models import User
+from communeer.deps import get_current_user, get_db, get_provider, require_role
+from communeer.errors import bad_request, conflict, service_unavailable
+from communeer.models import User, UserRole
 from communeer.providers.whatsapp.base import (
     WhatsAppNotConnectedError,
     WhatsAppProvider,
+    WhatsAppProviderUnavailableError,
 )
 from communeer.providers.whatsapp.wppconnect import WppconnectProvider
-from communeer.sync.service import sync_community
+from communeer.sync.service import SyncInProgressError, sync_community
 from communeer.whatsapp_status.schemas import WhatsAppStatusOut
 
 router = APIRouter(tags=["whatsapp"], dependencies=[Depends(get_current_user)])
@@ -32,14 +33,25 @@ def get_whatsapp_status(provider: WhatsAppProvider = Depends(get_provider)) -> W
     )
 
 
-@router.post("/whatsapp/connect", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/whatsapp/connect",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+)
 def connect_whatsapp(provider: WhatsAppProvider = Depends(get_provider)) -> None:
     if not isinstance(provider, WppconnectProvider):
         raise bad_request("Current provider does not support an explicit connect step.")
-    provider.start_session()
+    try:
+        provider.start_session()
+    except WhatsAppProviderUnavailableError as exc:
+        raise service_unavailable("WhatsApp service is unreachable right now. Please try again shortly.") from exc
 
 
-@router.post("/whatsapp/discover-and-sync", response_model=list[CommunitySummaryOut])
+@router.post(
+    "/whatsapp/discover-and-sync",
+    response_model=list[CommunitySummaryOut],
+    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+)
 def discover_and_sync(
     db: Session = Depends(get_db),
     provider: WhatsAppProvider = Depends(get_provider),
@@ -53,5 +65,9 @@ def discover_and_sync(
         ]
     except WhatsAppNotConnectedError as exc:
         raise bad_request(f"WhatsApp is not connected (state={exc!s}).") from exc
+    except WhatsAppProviderUnavailableError as exc:
+        raise service_unavailable("WhatsApp service is unreachable right now. Please try again shortly.") from exc
+    except SyncInProgressError as exc:
+        raise conflict("A sync for this community is already in progress — please try again shortly.") from exc
 
     return [_summary(db, community) for community in synced]

@@ -3,7 +3,10 @@ import { formatNumber } from '@/lib/format'
 
 interface StatTileProps {
   label: string
-  value: number
+  /** A plain count is formatted with `formatNumber`; pass a pre-formatted
+   * string (e.g. a relative time like "3 minutes ago") for non-numeric
+   * headline stats. */
+  value: number | string
   icon: LucideIcon
   tone?: 'default' | 'warning'
 }
@@ -21,7 +24,9 @@ export function StatTile({ label, value, icon: Icon, tone = 'default' }: StatTil
         <Icon className="size-5" />
       </div>
       <div>
-        <p className="text-2xl font-semibold tabular-nums leading-none">{formatNumber(value)}</p>
+        <p className="text-2xl font-semibold tabular-nums leading-none">
+          {typeof value === 'number' ? formatNumber(value) : value}
+        </p>
         <p className="mt-1 text-sm text-muted-foreground">{label}</p>
       </div>
     </div>

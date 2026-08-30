@@ -15,6 +15,8 @@ the Advanced/raw-metadata viewer already looks like what a real provider will
 eventually send.
 """
 
+import base64
+import hashlib
 import random
 from datetime import UTC, datetime, timedelta
 from itertools import product
@@ -106,12 +108,50 @@ def _build_fixture() -> tuple[ProviderCommunity, ProviderCommunity]:
             joined = member.first_seen_at + timedelta(days=rng.randint(0, 30))
         else:
             joined = _NOW - timedelta(days=rng.randint(0, 5))
+
+        # Synthetic, deterministic `last_message_at`, with real variety on
+        # purpose: some members are recent posters, some haven't written in
+        # a long while, and some have genuinely never posted — that last
+        # case must be a real, visible outcome here too (not something only
+        # the real provider ever produces), otherwise the frontend would
+        # never see the "never posted" case in mock mode. A `pending`
+        # member hasn't actually joined the group yet, so they get `None`
+        # here unconditionally rather than a fabricated message history.
+        # `last_seen_at` stays `None` unconditionally, even in mock mode:
+        # faking presence data would suggest something the real provider
+        # (WPPConnect) can never actually supply — see wppconnect.py.
+        last_message_at = None
+        if status == "member":
+            roll = rng.random()
+            if roll < 0.18:
+                last_message_at = None  # never posted in this group
+            elif roll < 0.55:
+                # recent poster: sometime in the last two weeks.
+                last_message_at = _NOW - timedelta(
+                    days=rng.randint(0, 14), hours=rng.randint(0, 23)
+                )
+            else:
+                # posted at some point between joining and now, but not
+                # necessarily recently.
+                span_days = max((_NOW - joined).days, 1)
+                last_message_at = joined + timedelta(days=rng.randint(0, span_days))
+
         return ProviderMembership(
             member=member,
             is_admin=is_admin,
             is_super_admin=is_super_admin,
             status=status,
             joined_at=joined,
+            last_message_at=last_message_at,
+            last_seen_at=None,
+            # Mirrors `last_message_at` above into the unified activity
+            # fields too, for consistency with the real WPPConnect provider
+            # (which now derives both from the same parsed chat history) —
+            # no synthetic message body is generated here, so content stays
+            # `None` rather than fabricating text nobody asked for.
+            last_activity_type="message" if last_message_at is not None else None,
+            last_activity_at=last_message_at,
+            last_activity_content=None,
         )
 
     def make_pool(count: int) -> list[ProviderMember]:
@@ -492,3 +532,12 @@ class MockWhatsAppProvider(WhatsAppProvider):
         # (no filtering) so mock mode keeps showing every fixture community,
         # completely unaffected by the admin-only filter.
         return None
+
+    def get_group_invite_link(self, group_wa_id: str) -> str | None:
+        # Deterministic per group (same code every call, like every other
+        # fixture in this file) rather than random — a 22-char code derived
+        # from a hash of the group's own id, shaped like a real WhatsApp
+        # invite code but obviously never a working link.
+        digest = hashlib.sha256(group_wa_id.encode()).hexdigest()
+        code = base64.urlsafe_b64encode(bytes.fromhex(digest))[:22].decode()
+        return f"https://chat.whatsapp.com/{code}"

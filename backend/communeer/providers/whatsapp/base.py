@@ -42,6 +42,31 @@ class ProviderMembership(BaseModel):
     is_super_admin: bool = False
     status: Literal["member", "pending"] = "member"
     joined_at: datetime | None = None
+    # Real activity signals. `last_message_at`: last time this member wrote a
+    # real (non-system) message in this group — WPPConnect can supply this
+    # (see `WppconnectProvider._build_memberships`). `last_seen_at`: last
+    # presence/read-receipt info — always `None` for every provider today;
+    # WhatsApp doesn't expose this in practice (verified live: `last-seen`/
+    # `chat-is-online` return no data for real accounts), so this field
+    # exists for a future provider that might actually supply it, not because
+    # any current provider does.
+    last_message_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    # Unified "last activity" (message/reaction/view) — a richer sibling of
+    # `last_message_at` above (type + timestamp + content, not just a
+    # timestamp). A real provider can only ever supply `"message"` here (from
+    # parsed chat history at sync time, see `WppconnectProvider`); `reaction`/
+    # `view` are populated exclusively by the live webhook
+    # (`webhooks/router.py`), never backfilled at sync — there's no bulk
+    # "past reactions" API call this codebase is willing to make (N+1, one
+    # call per message; see `wppconnect.py`'s own docstring), and no
+    # "past views" API exists at all. A plain `Literal` rather than importing
+    # the DB-layer `ActivityType` enum, matching how `status` above is
+    # already a `Literal` instead of importing `MembershipStatus` — this
+    # module stays decoupled from `communeer.models`.
+    last_activity_type: Literal["message", "reaction", "view"] | None = None
+    last_activity_at: datetime | None = None
+    last_activity_content: str | None = None
 
 
 class ProviderGroup(BaseModel):
@@ -105,6 +130,14 @@ class WhatsAppNotConnectedError(Exception):
     a generic failure."""
 
 
+class WhatsAppProviderUnavailableError(Exception):
+    """Raised when the underlying WhatsApp integration (e.g. the WPPConnect
+    server) can't be reached or returns something unusable — a transport
+    failure, not a "not connected yet" state. Callers should turn this into
+    a fast, honest error response instead of letting it hang until an HTTP
+    client timeout and fall through to a generic 500."""
+
+
 class WhatsAppProvider(ABC):
     """Abstract seam every WhatsApp integration implements."""
 
@@ -162,4 +195,19 @@ class WhatsAppProvider(ABC):
         `None` rather than propagate, since callers use this to *narrow* a
         list, and a crash here shouldn't take down an otherwise-working
         community list.
+        """
+
+    @abstractmethod
+    def get_group_invite_link(self, group_wa_id: str) -> str | None:
+        """The group's current `https://chat.whatsapp.com/...` invite link,
+        fetched on demand (never prefetched/cached alongside the rest of a
+        group's data — this is a separate, deliberately lazy WPPConnect
+        call, matching this codebase's "no request nobody asked for" cost
+        posture).
+
+        Contract: **must never raise** — a group the connected account can't
+        generate a link for (not an admin there, links revoked, a transient
+        WPPConnect error) degrades to `None`, the same honest-unavailability
+        posture as every other "WhatsApp doesn't give us this right now"
+        case in this codebase, not an error to surface as a 500.
         """

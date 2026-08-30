@@ -42,6 +42,14 @@ def bad_request(message: str) -> ApiError:
     return ApiError(status.HTTP_400_BAD_REQUEST, "bad_request", message)
 
 
+def service_unavailable(message: str) -> ApiError:
+    return ApiError(status.HTTP_503_SERVICE_UNAVAILABLE, "service_unavailable", message)
+
+
+def conflict(message: str) -> ApiError:
+    return ApiError(status.HTTP_409_CONFLICT, "conflict", message)
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:

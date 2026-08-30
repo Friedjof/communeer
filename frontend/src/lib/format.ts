@@ -37,9 +37,14 @@ export function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
+/** First Unicode code point of a string — plain `str[0]` splits surrogate pairs (emoji), rendering as "�". */
+function firstCodePoint(value: string): string {
+  return [...value][0] ?? ''
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return '?'
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase()
-  return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase()
+  if (parts.length === 1) return [...parts[0]!].slice(0, 2).join('').toUpperCase()
+  return `${firstCodePoint(parts[0]!)}${firstCodePoint(parts[parts.length - 1]!)}`.toUpperCase()
 }

@@ -55,18 +55,28 @@ def is_confirmation_expired(
 def get_renewal_suggestions(db: Session, community: Community) -> list[MemberAggregate]:
     """Renewal-round candidates: every community member who is not an admin
     (of any group, or of the community specifically — either is enough to
-    exclude), oldest `joined_at` first so the longest-unconfirmed tenure
-    surfaces first for a human to review (an unknown `joined_at` sorts last,
-    not first, so missing data never jumps the queue).
+    exclude), sorted so the most likely renewal candidates surface first.
 
-    This is a suggestion list only — no message/read-receipt activity data
-    exists in this codebase yet (that needs a separate, unbuilt verification
-    spike). Callers building a response from this must mark every row as
-    "activity unknown" explicitly rather than imply data that isn't there.
+    Sort key, in order: (1) members who have **never posted**
+    (`last_message_at is None`) first — a real "never active" signal is the
+    strongest renewal-candidate indicator now available, so it must not get
+    buried; (2) among the rest, longest-since-last-message first (oldest
+    `last_message_at` first); (3) as a tie-breaker/fallback, the previous
+    behavior is preserved — oldest `joined_at` first, with an unknown
+    `joined_at` sorting last rather than first, so missing data never jumps
+    the queue.
     """
     aggregates = list_community_members(db, community)
     eligible = [a for a in aggregates if not a.is_admin and not a.is_community_admin]
-    return sorted(eligible, key=lambda a: (a.joined_at is None, a.joined_at))
+    return sorted(
+        eligible,
+        key=lambda a: (
+            a.last_message_at is not None,
+            a.last_message_at,
+            a.joined_at is None,
+            a.joined_at,
+        ),
+    )
 
 
 def create_renewal_campaign(
@@ -186,6 +196,44 @@ def get_campaign_summary(db: Session, campaign: RenewalCampaign) -> CampaignCoun
             pending += 1
 
     return CampaignCounts(pending=pending, confirmed=confirmed, expired=expired, total=len(confirmations))
+
+
+def get_campaign_summaries(
+    db: Session, campaigns: list[RenewalCampaign]
+) -> dict[uuid.UUID, CampaignCounts]:
+    """Same pending/confirmed/expired/total computation as
+    `get_campaign_summary()`, batched across many campaigns in a single query
+    instead of one `get_campaign_confirmations()` round trip per campaign —
+    used by the campaign-listing endpoint. A campaign with zero confirmations
+    still gets an all-zero `CampaignCounts` entry (never a missing key)."""
+    campaign_ids = [campaign.id for campaign in campaigns]
+    confirmations_by_campaign: dict[uuid.UUID, list[RenewalConfirmation]] = {
+        campaign_id: [] for campaign_id in campaign_ids
+    }
+    if campaign_ids:
+        rows = db.execute(
+            select(RenewalConfirmation).where(RenewalConfirmation.campaign_id.in_(campaign_ids))
+        ).scalars()
+        for confirmation in rows:
+            confirmations_by_campaign[confirmation.campaign_id].append(confirmation)
+
+    now = datetime.now(UTC)
+    campaigns_by_id = {campaign.id: campaign for campaign in campaigns}
+    summaries: dict[uuid.UUID, CampaignCounts] = {}
+    for campaign_id, confirmations in confirmations_by_campaign.items():
+        campaign = campaigns_by_id[campaign_id]
+        pending = confirmed = expired = 0
+        for confirmation in confirmations:
+            if confirmation.status == RenewalConfirmationStatus.confirmed:
+                confirmed += 1
+            elif is_confirmation_expired(confirmation, campaign, now=now):
+                expired += 1
+            else:
+                pending += 1
+        summaries[campaign_id] = CampaignCounts(
+            pending=pending, confirmed=confirmed, expired=expired, total=len(confirmations)
+        )
+    return summaries
 
 
 def get_campaign_confirmations(db: Session, campaign: RenewalCampaign) -> list[RenewalConfirmation]:

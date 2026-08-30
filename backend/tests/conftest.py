@@ -23,6 +23,7 @@ os.environ["SESSION_COOKIE_SECURE"] = "false"
 os.environ["SEED_ADMIN_USERNAME"] = "admin"
 os.environ["SEED_ADMIN_PASSWORD"] = "changeme123"
 os.environ["WHATSAPP_PROVIDER"] = "mock"
+os.environ["WEBHOOK_SECRET"] = "test-webhook-secret"
 
 
 @pytest.fixture()

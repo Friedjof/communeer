@@ -13,3 +13,7 @@ export function getGroupMembers(groupId: string): Promise<GroupMemberRow[]> {
 export function getGroupRequests(groupId: string): Promise<GroupJoinRequest[]> {
   return apiGet<GroupJoinRequest[]>(`/groups/${groupId}/requests`)
 }
+
+export function getGroupInviteLink(groupId: string): Promise<{ inviteLink: string | null }> {
+  return apiGet<{ inviteLink: string | null }>(`/groups/${groupId}/invite-link`)
+}

@@ -1,3 +1,5 @@
+import type { ActivityType } from '@/components/data/ActivityBar'
+
 export interface CommunityMemberRow {
   id: string
   waId: string
@@ -8,6 +10,14 @@ export interface CommunityMemberRow {
   isCommunityAdmin: boolean
   groupCount: number
   joinedAt: string | null
+  /** Last time this member actually posted a message — a verified signal, `null` means never posted. */
+  lastMessageAt: string | null
+  /** Almost always `null`: WhatsApp doesn't expose presence/read data for most accounts. */
+  lastSeenAt: string | null
+  /** Unified "last activity" (message/reaction/view), live-updated via the WPPConnect webhook. */
+  lastActivityType: ActivityType | null
+  lastActivityAt: string | null
+  lastActivityContent: string | null
 }
 
 export type MembershipStatus = 'member' | 'pending'
@@ -20,6 +30,9 @@ export interface MemberMembership {
   isAdmin: boolean
   status: MembershipStatus
   joinedAt: string | null
+  lastActivityType: ActivityType | null
+  lastActivityAt: string | null
+  lastActivityContent: string | null
 }
 
 export interface MemberDetail {

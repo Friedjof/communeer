@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     wppconnect_session_name: str = "communeer"
     wppconnect_http_timeout_seconds: float = 30.0
 
+    # Shared secret for the inbound WPPConnect webhook (see
+    # `communeer/webhooks/router.py`). Left unset by default so a fresh
+    # install has no live webhook path until explicitly configured.
+    webhook_secret: str | None = None
+
     # CORS (only relevant for local dev where frontend runs on a different
     # origin/port than the backend; Docker/Caddy serves same-origin)
     cors_allow_origins: list[str] = ["http://localhost:5173"]

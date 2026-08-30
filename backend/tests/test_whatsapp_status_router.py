@@ -44,6 +44,47 @@ def test_discover_and_sync_returns_synced_summaries_for_mock_provider(client):
         assert "waId" in community and "memberCount" in community
 
 
+def test_discover_and_sync_returns_503_when_provider_is_unavailable(client, monkeypatch):
+    """A transport failure translated into `WhatsAppProviderUnavailableError`
+    (see `providers/whatsapp/wppconnect.py`) must surface as a clean 503 at
+    `POST /whatsapp/discover-and-sync`, not the generic 500 an unguarded
+    `httpx.HTTPError` used to produce."""
+    import communeer.whatsapp_status.router as whatsapp_status_router_module
+    from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
+
+    _login(client)
+
+    def _raise_unavailable(*args, **kwargs):
+        raise WhatsAppProviderUnavailableError("boom")
+
+    monkeypatch.setattr(whatsapp_status_router_module, "sync_community", _raise_unavailable)
+
+    response = client.post("/api/v1/whatsapp/discover-and-sync")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "service_unavailable"
+
+
+def test_discover_and_sync_returns_409_when_a_sync_is_already_in_progress(client, monkeypatch):
+    """`sync_community`'s `IntegrityError` -> `SyncInProgressError`
+    translation (see `sync/service.py`) must surface as a clean 409 at
+    `POST /whatsapp/discover-and-sync`."""
+    import communeer.whatsapp_status.router as whatsapp_status_router_module
+    from communeer.sync.service import SyncInProgressError
+
+    _login(client)
+
+    def _raise_in_progress(*args, **kwargs):
+        raise SyncInProgressError("already syncing")
+
+    monkeypatch.setattr(whatsapp_status_router_module, "sync_community", _raise_in_progress)
+
+    response = client.post("/api/v1/whatsapp/discover-and-sync")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+
+
 def test_status_requires_auth(client):
     response = client.get("/api/v1/whatsapp/status")
     assert response.status_code == 401
@@ -57,3 +98,54 @@ def test_connect_requires_auth(client):
 def test_discover_and_sync_requires_auth(client):
     response = client.post("/api/v1/whatsapp/discover-and-sync")
     assert response.status_code == 401
+
+
+def _seed_viewer_user() -> None:
+    """Creates a `viewer`-role user directly via the DB, bypassing the
+    normal (owner-only, not yet built) user-management flow — same pattern
+    used in `test_moderation.py`."""
+    from sqlalchemy import select
+
+    from communeer.auth.security import hash_password
+    from communeer.db import SessionLocal
+    from communeer.models import User, UserRole
+
+    db = SessionLocal()
+    try:
+        existing = db.execute(select(User).where(User.username == "viewer")).scalar_one_or_none()
+        if existing is not None:
+            return
+        db.add(
+            User(
+                username="viewer",
+                password_hash=hash_password("viewer-password-123"),
+                role=UserRole.viewer,
+                is_active=True,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_viewer_role_gets_403_on_connect_and_discover_and_sync_but_owner_gets_through(client):
+    _seed_viewer_user()
+
+    viewer_login = client.post("/api/v1/auth/login", json={"username": "viewer", "password": "viewer-password-123"})
+    assert viewer_login.status_code == 200
+    assert viewer_login.json()["role"] == "viewer"
+
+    connect_response = client.post("/api/v1/whatsapp/connect")
+    assert connect_response.status_code == 403
+    assert connect_response.json()["error"]["code"] == "forbidden"
+
+    discover_response = client.post("/api/v1/whatsapp/discover-and-sync")
+    assert discover_response.status_code == 403
+    assert discover_response.json()["error"]["code"] == "forbidden"
+
+    client.post("/api/v1/auth/logout")
+    _login(client)
+
+    # owner still gets the mock provider's normal (non-403) responses.
+    assert client.post("/api/v1/whatsapp/connect").status_code == 400
+    assert client.post("/api/v1/whatsapp/discover-and-sync").status_code == 200
