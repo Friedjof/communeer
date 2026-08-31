@@ -32,6 +32,11 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
+[tool.ruff]
+# Alembic-generated migration boilerplate doesn't follow project lint rules
+# and is regenerated on each new migration — exclude it from linting.
+exclude = ["migrations"]
+
 [tool.ruff.lint]
 # B008: FastAPI's `Depends(...)` as an argument default is the intended,
 # idiomatic pattern for this framework, not a bug.
