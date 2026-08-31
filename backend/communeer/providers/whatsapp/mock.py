@@ -29,6 +29,7 @@ from communeer.providers.whatsapp.base import (
     WhatsAppConnectionState,
     WhatsAppConnectionStatus,
     WhatsAppProvider,
+    WhatsAppProviderUnavailableError,
 )
 
 _SEED = 42
@@ -541,3 +542,65 @@ class MockWhatsAppProvider(WhatsAppProvider):
         digest = hashlib.sha256(group_wa_id.encode()).hexdigest()
         code = base64.urlsafe_b64encode(bytes.fromhex(digest))[:22].decode()
         return f"https://chat.whatsapp.com/{code}"
+
+    def _get_group_or_raise(self, group_wa_id: str) -> ProviderGroup:
+        group = self._groups_by_wa_id.get(group_wa_id)
+        if group is None:
+            raise WhatsAppProviderUnavailableError(f"Unknown group: {group_wa_id!r}")
+        return group
+
+    def _find_membership_index(self, group: ProviderGroup, member_wa_id: str) -> int:
+        for index, membership in enumerate(group.memberships):
+            if membership.member.wa_id == member_wa_id:
+                return index
+        raise WhatsAppProviderUnavailableError(
+            f"No membership for {member_wa_id!r} in group {group.wa_id!r}"
+        )
+
+    def _strip_pending_wa_id(self, group: ProviderGroup, member_wa_id: str) -> None:
+        """Keep `raw`'s WPPConnect-shaped `pendingParticipants`/
+        `membershipApprovalRequests` fields consistent with `memberships`
+        after an approve/reject — the raw-metadata viewer reads directly from
+        `raw`, so a stale pending entry there would look like a UI bug."""
+        group.raw["pendingParticipants"] = [
+            wa_id for wa_id in group.raw.get("pendingParticipants", []) if wa_id != member_wa_id
+        ]
+        group.raw["membershipApprovalRequests"] = [
+            entry
+            for entry in group.raw.get("membershipApprovalRequests", [])
+            if entry.get("wa_id") != member_wa_id
+        ]
+
+    def approve_join_request(self, group_wa_id: str, member_wa_id: str) -> None:
+        group = self._get_group_or_raise(group_wa_id)
+        index = self._find_membership_index(group, member_wa_id)
+        membership = group.memberships[index]
+        if membership.status != "pending":
+            raise WhatsAppProviderUnavailableError(
+                f"Membership for {member_wa_id!r} in group {group_wa_id!r} is not pending"
+            )
+        group.memberships[index] = membership.model_copy(
+            update={"status": "member", "joined_at": datetime.now(UTC)}
+        )
+        self._strip_pending_wa_id(group, member_wa_id)
+
+    def reject_join_request(self, group_wa_id: str, member_wa_id: str) -> None:
+        group = self._get_group_or_raise(group_wa_id)
+        index = self._find_membership_index(group, member_wa_id)
+        if group.memberships[index].status != "pending":
+            raise WhatsAppProviderUnavailableError(
+                f"Membership for {member_wa_id!r} in group {group_wa_id!r} is not pending"
+            )
+        del group.memberships[index]
+        self._strip_pending_wa_id(group, member_wa_id)
+
+    def remove_member(self, group_wa_id: str, member_wa_id: str) -> None:
+        group = self._get_group_or_raise(group_wa_id)
+        index = self._find_membership_index(group, member_wa_id)
+        del group.memberships[index]
+        self._strip_pending_wa_id(group, member_wa_id)
+
+    def set_member_admin(self, group_wa_id: str, member_wa_id: str, is_admin: bool) -> None:
+        group = self._get_group_or_raise(group_wa_id)
+        index = self._find_membership_index(group, member_wa_id)
+        group.memberships[index] = group.memberships[index].model_copy(update={"is_admin": is_admin})

@@ -798,3 +798,42 @@ class WppconnectProvider(WhatsAppProvider):
             return None
         link = body.get("response")
         return link if isinstance(link, str) and link else None
+
+    # -- write actions --------------------------------------------------
+    #
+    # **Unverified against a real server**, unlike every read method above:
+    # this codebase has never exercised these against a live WPPConnect
+    # instance (see the module docstring's own "explicitly unverified
+    # hypothesis" precedent for `list-chats` — same posture here). Endpoint
+    # paths/body shapes below follow WPPConnect Server's documented REST API
+    # and mirror this file's own established `/{action}/{group_wa_id}` shape
+    # (see `group-members`, `group-admins`, `get-messages` above), but have
+    # not been confirmed live. If a real server rejects these, the fix is to
+    # adjust the path/body here — `groups/service.py` callers only depend on
+    # "raises `WhatsAppProviderUnavailableError` on failure", not on any
+    # particular wire shape.
+
+    def _participant_write(self, action: str, group_wa_id: str, member_wa_id: str) -> None:
+        self._require_connected()
+        try:
+            resp = self._authed_request(
+                "POST",
+                f"/api/{self._session_name}/{action}/{group_wa_id}",
+                json={"phone": member_wa_id},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
+
+    def approve_join_request(self, group_wa_id: str, member_wa_id: str) -> None:
+        self._participant_write("group-approve-participant", group_wa_id, member_wa_id)
+
+    def reject_join_request(self, group_wa_id: str, member_wa_id: str) -> None:
+        self._participant_write("group-reject-participant", group_wa_id, member_wa_id)
+
+    def remove_member(self, group_wa_id: str, member_wa_id: str) -> None:
+        self._participant_write("remove-participant", group_wa_id, member_wa_id)
+
+    def set_member_admin(self, group_wa_id: str, member_wa_id: str, is_admin: bool) -> None:
+        action = "promote-participant" if is_admin else "demote-participant"
+        self._participant_write(action, group_wa_id, member_wa_id)

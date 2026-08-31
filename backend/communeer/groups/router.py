@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from communeer.communities.service import (
     get_group_admin_count,
     get_group_last_message_at,
 )
-from communeer.deps import get_current_user, get_db, get_provider
+from communeer.deps import get_current_user, get_db, get_provider, require_role
 from communeer.errors import not_found
 from communeer.groups.schemas import (
     GroupDetailAdvancedOut,
@@ -18,10 +18,28 @@ from communeer.groups.schemas import (
     GroupRequestOut,
     GroupSummaryOut,
 )
-from communeer.models import Group, GroupMembership, Member, MembershipStatus
+from communeer.groups.service import (
+    approve_join_request,
+    reject_join_request,
+    remove_group_member,
+    set_group_member_admin,
+)
+from communeer.models import (
+    Group,
+    GroupMembership,
+    Member,
+    MembershipStatus,
+    User,
+    UserRole,
+)
 from communeer.providers.whatsapp.base import WhatsAppProvider
 
 router = APIRouter(tags=["groups"], dependencies=[Depends(get_current_user)])
+
+# Owner/admin only, same posture as `moderation/router.py` — a viewer can
+# still read `GET .../requests` and `GET .../members` via the router-level
+# `get_current_user` dependency above, just not act on them.
+_require_manager = require_role(UserRole.owner, UserRole.admin)
 
 
 def get_group_or_404(db: Session, group_id: uuid.UUID) -> Group:
@@ -128,3 +146,63 @@ def list_group_requests(group_id: uuid.UUID, db: Session = Depends(get_db)) -> l
         )
         for membership, member in rows
     ]
+
+
+@router.post("/groups/{group_id}/requests/{member_id}/approve", status_code=status.HTTP_204_NO_CONTENT)
+def approve_join_request_route(
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(_require_manager),
+) -> None:
+    group = get_group_or_404(db, group_id)
+    approve_join_request(db, provider, group, member_id, actor_user_id=user.id)
+
+
+@router.post("/groups/{group_id}/requests/{member_id}/reject", status_code=status.HTTP_204_NO_CONTENT)
+def reject_join_request_route(
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(_require_manager),
+) -> None:
+    group = get_group_or_404(db, group_id)
+    reject_join_request(db, provider, group, member_id, actor_user_id=user.id)
+
+
+@router.post("/groups/{group_id}/members/{member_id}/remove", status_code=status.HTTP_204_NO_CONTENT)
+def remove_group_member_route(
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(_require_manager),
+) -> None:
+    group = get_group_or_404(db, group_id)
+    remove_group_member(db, provider, group, member_id, actor_user_id=user.id)
+
+
+@router.post("/groups/{group_id}/members/{member_id}/promote", status_code=status.HTTP_204_NO_CONTENT)
+def promote_group_member_route(
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(_require_manager),
+) -> None:
+    group = get_group_or_404(db, group_id)
+    set_group_member_admin(db, provider, group, member_id, True, actor_user_id=user.id)
+
+
+@router.post("/groups/{group_id}/members/{member_id}/demote", status_code=status.HTTP_204_NO_CONTENT)
+def demote_group_member_route(
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(_require_manager),
+) -> None:
+    group = get_group_or_404(db, group_id)
+    set_group_member_admin(db, provider, group, member_id, False, actor_user_id=user.id)

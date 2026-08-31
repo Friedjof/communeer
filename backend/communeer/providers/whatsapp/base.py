@@ -6,8 +6,12 @@ These are plain Pydantic models describing what *any* WhatsApp integration
 a concrete provider, so swapping `mock` for `wppconnect` via the
 `WHATSAPP_PROVIDER` env var touches no router or service code.
 
-Read-only for now: `remove_member` / other mutating operations are a
-documented future extension point, not a stubbed dead endpoint.
+Mostly read-only: the four mutating methods at the bottom of
+`WhatsAppProvider` (`approve_join_request`, `reject_join_request`,
+`remove_member`, `set_member_admin`) are the only ones allowed to raise on
+failure — every read method above them must degrade gracefully instead (see
+each method's own contract). A write failing silently would let the local DB
+drift out of sync with WhatsApp, which is worse than a visible error.
 """
 
 from abc import ABC, abstractmethod
@@ -210,4 +214,37 @@ class WhatsAppProvider(ABC):
         WPPConnect error) degrades to `None`, the same honest-unavailability
         posture as every other "WhatsApp doesn't give us this right now"
         case in this codebase, not an error to surface as a 500.
+        """
+
+    @abstractmethod
+    def approve_join_request(self, group_wa_id: str, member_wa_id: str) -> None:
+        """Approve a pending join request, admitting the member to the group.
+
+        Contract: unlike every read method above, this **may raise**
+        `WhatsAppNotConnectedError` or `WhatsAppProviderUnavailableError` on
+        failure — callers (see `groups/service.py`) call this *before*
+        mutating the local DB and propagate the failure rather than silently
+        leaving WhatsApp and the DB out of sync.
+        """
+
+    @abstractmethod
+    def reject_join_request(self, group_wa_id: str, member_wa_id: str) -> None:
+        """Reject a pending join request; the requester is not admitted.
+
+        Same raise-on-failure contract as `approve_join_request`.
+        """
+
+    @abstractmethod
+    def remove_member(self, group_wa_id: str, member_wa_id: str) -> None:
+        """Remove an existing member from the group.
+
+        Same raise-on-failure contract as `approve_join_request`.
+        """
+
+    @abstractmethod
+    def set_member_admin(self, group_wa_id: str, member_wa_id: str, is_admin: bool) -> None:
+        """Promote (`is_admin=True`) or demote (`is_admin=False`) an existing
+        group member's admin standing.
+
+        Same raise-on-failure contract as `approve_join_request`.
         """

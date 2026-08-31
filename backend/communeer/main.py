@@ -25,6 +25,7 @@ from communeer.providers.whatsapp.base import (
 from communeer.renewals.router import router as renewals_router
 from communeer.sync.router import router as sync_router
 from communeer.sync.service import sync_community
+from communeer.users.router import router as users_router
 from communeer.webhooks.router import router as webhooks_router
 from communeer.whatsapp_status.router import router as whatsapp_status_router
 
@@ -135,6 +136,7 @@ def create_app() -> FastAPI:
     app.include_router(renewals_router, prefix=api_prefix)
     app.include_router(webhooks_router, prefix=api_prefix)
     app.include_router(moderation_router, prefix=api_prefix)
+    app.include_router(users_router, prefix=api_prefix)
 
     return app
 

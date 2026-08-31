@@ -170,6 +170,18 @@ def test_sync_stamps_joined_at_once_and_never_blanks_it(db_session):
         def get_group_invite_link(self, group_wa_id):
             return None
 
+        def approve_join_request(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def reject_join_request(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def remove_member(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def set_member_admin(self, group_wa_id, member_wa_id, is_admin):
+            raise NotImplementedError
+
         def _community(self) -> ProviderCommunity:
             member = ProviderMember(
                 wa_id=member_wa_id,
@@ -246,6 +258,18 @@ def test_sync_stamps_last_message_at_forward_only_never_regresses_or_blanks(db_s
 
         def get_group_invite_link(self, group_wa_id):
             return None
+
+        def approve_join_request(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def reject_join_request(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def remove_member(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def set_member_admin(self, group_wa_id, member_wa_id, is_admin):
+            raise NotImplementedError
 
         def _community(self) -> ProviderCommunity:
             member = ProviderMember(
@@ -347,6 +371,18 @@ def test_sync_stamps_unified_last_activity_from_chat_history_forward_only(db_ses
 
         def get_group_invite_link(self, group_wa_id):
             return None
+
+        def approve_join_request(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def reject_join_request(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def remove_member(self, group_wa_id, member_wa_id):
+            raise NotImplementedError
+
+        def set_member_admin(self, group_wa_id, member_wa_id, is_admin):
+            raise NotImplementedError
 
         def _community(self) -> ProviderCommunity:
             member = ProviderMember(
