@@ -9,7 +9,7 @@ import {
   useLegacyTable as useReactTable,
 } from '@tanstack/react-table/legacy'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Columns3, Download, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -24,6 +24,8 @@ import { EmptyState } from '@/components/feedback/EmptyState'
 import { downloadCsv, toCsv } from '@/lib/csv'
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 250]
+const MAX_STAGGERED_ROWS = 15
+const SEARCH_DEBOUNCE_MS = 250
 
 interface DataTableExportColumn<TData> {
   header: string
@@ -64,6 +66,32 @@ export function DataTable<TData extends RowData>({
   const [sorting, setSorting] = useState<SortingState>(initialSorting)
   const [globalFilter, setGlobalFilter] = useState('')
   const [columnVisibility, setColumnVisibility] = useState<ColumnVisibilityState>(initialColumnVisibility)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // The input itself stays perfectly responsive (updated on every keystroke);
+  // only the expensive part — actually re-filtering the whole (potentially
+  // ~1000-row) array — is debounced, so typing doesn't re-scan the dataset on
+  // every single keystroke.
+  const [searchInput, setSearchInput] = useState('')
+  useEffect(() => {
+    const timeout = setTimeout(() => setGlobalFilter(searchInput), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timeout)
+  }, [searchInput])
+
+  // "/" focuses the search box (GitHub-style) — ignored while already typing
+  // in any input/textarea/contenteditable, so it never hijacks normal typing.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+      event.preventDefault()
+      searchInputRef.current?.focus()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const table = useReactTable({
     data,
@@ -100,8 +128,9 @@ export function DataTable<TData extends RowData>({
         <div className="relative max-w-xs flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            value={globalFilter}
-            onChange={(event) => setGlobalFilter(event.target.value)}
+            ref={searchInputRef}
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
             placeholder={searchPlaceholder}
             className="pl-8"
           />
@@ -181,10 +210,19 @@ export function DataTable<TData extends RowData>({
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row) => (
+              rows.map((row, index) => (
                 <TableRow
                   key={row.id}
-                  className={onRowClick ? 'cursor-pointer' : undefined}
+                  className={
+                    onRowClick
+                      ? 'cursor-pointer animate-in fade-in slide-in-from-bottom-1 transition-colors duration-200 hover:bg-muted/60'
+                      : 'animate-in fade-in slide-in-from-bottom-1 duration-200'
+                  }
+                  style={
+                    index < MAX_STAGGERED_ROWS
+                      ? { animationDelay: `${index * 30}ms`, animationFillMode: 'backwards' }
+                      : undefined
+                  }
                   onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (

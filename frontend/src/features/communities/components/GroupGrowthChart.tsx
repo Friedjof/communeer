@@ -150,7 +150,7 @@ export function GroupGrowthChart({ communityId }: GroupGrowthChartProps) {
             />
             <ReferenceLine x={0} stroke="var(--border)" />
             <Tooltip content={GrowthTooltip} cursor={{ fill: 'var(--muted)', opacity: 0.4 }} />
-            <Bar dataKey="growth" maxBarSize={20} isAnimationActive={false} shape={GrowthBarShape} />
+            <Bar dataKey="growth" maxBarSize={20} isAnimationActive animationDuration={500} shape={GrowthBarShape} />
           </BarChart>
         </ResponsiveContainer>
       </div>

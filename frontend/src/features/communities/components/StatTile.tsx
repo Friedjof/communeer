@@ -1,4 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
+import { useCountUp } from '@/hooks/useCountUp'
 import { formatNumber } from '@/lib/format'
 
 interface StatTileProps {
@@ -11,9 +12,14 @@ interface StatTileProps {
   tone?: 'default' | 'warning'
 }
 
+function StatTileValue({ value }: { value: number }) {
+  const animated = useCountUp(value)
+  return <>{formatNumber(animated)}</>
+}
+
 export function StatTile({ label, value, icon: Icon, tone = 'default' }: StatTileProps) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-card p-4">
+    <div className="flex animate-in items-center gap-3 rounded-lg border bg-card p-4 fade-in duration-300">
       <div
         className={
           tone === 'warning'
@@ -25,7 +31,7 @@ export function StatTile({ label, value, icon: Icon, tone = 'default' }: StatTil
       </div>
       <div>
         <p className="text-2xl font-semibold tabular-nums leading-none">
-          {typeof value === 'number' ? formatNumber(value) : value}
+          {typeof value === 'number' ? <StatTileValue value={value} /> : value}
         </p>
         <p className="mt-1 text-sm text-muted-foreground">{label}</p>
       </div>

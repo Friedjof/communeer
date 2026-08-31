@@ -19,16 +19,48 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useSession } from '@/features/auth/queries'
 import type { UserRole } from '@/features/auth/types'
+import { cn } from '@/lib/utils'
 import { formatDate } from '@/lib/format'
 import { useCreateUser, useResetUserPassword, useUpdateUser, useUsers } from './queries'
 import type { ManagedUser } from './types'
 
 const ROLE_OPTIONS: UserRole[] = ['owner', 'admin', 'viewer']
 
+const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
+  owner: 'Full access, including managing the team.',
+  admin: 'Manage groups, members, and moderation.',
+  viewer: 'Read-only access.',
+}
+
 function ApiErrorText({ error }: { error: unknown }) {
   if (!error) return null
   const message = error instanceof ApiError ? error.message : 'Something went wrong. Please try again.'
   return <p className="text-sm text-destructive">{message}</p>
+}
+
+function RoleCard({
+  role,
+  selected,
+  onSelect,
+}: {
+  role: UserRole
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={cn(
+        'flex flex-col gap-1 rounded-lg border p-3 text-left text-sm transition-colors hover:bg-muted/60',
+        selected ? 'border-primary bg-primary/5' : 'border-input',
+      )}
+    >
+      <span className="font-medium capitalize">{role}</span>
+      <span className="text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</span>
+    </button>
+  )
 }
 
 function CreateUserDialog() {
@@ -54,31 +86,42 @@ function CreateUserDialog() {
       <DialogTrigger asChild>
         <Button>New user</Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Create a new user</DialogTitle>
           <DialogDescription>They can log in with this username and password right away.</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <Input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-          <Input
-            type="password"
-            placeholder="Password (min. 8 characters)"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <Select value={role} onValueChange={(value) => setRole(value as UserRole)}>
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="new-user-username" className="text-sm font-medium">
+                Username
+              </label>
+              <Input id="new-user-username" value={username} onChange={(e) => setUsername(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="new-user-password" className="text-sm font-medium">
+                Password
+              </label>
+              <Input
+                id="new-user-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">Minimum 8 characters</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">Role</span>
+            <div className="grid grid-cols-3 gap-3">
               {ROLE_OPTIONS.map((option) => (
-                <SelectItem key={option} value={option} className="capitalize">
-                  {option}
-                </SelectItem>
+                <RoleCard key={option} role={option} selected={role === option} onSelect={() => setRole(option)} />
               ))}
-            </SelectContent>
-          </Select>
+            </div>
+          </div>
+
           <ApiErrorText error={createUser.error} />
         </div>
         <DialogFooter>
@@ -123,18 +166,22 @@ function ResetPasswordDialog({ user }: { user: ManagedUser }) {
           Reset password
         </Button>
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Reset password for {user.username}</DialogTitle>
           <DialogDescription>They'll need to use this new password on their next login.</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="reset-password-input" className="text-sm font-medium">
+            New password
+          </label>
           <Input
+            id="reset-password-input"
             type="password"
-            placeholder="New password (min. 8 characters)"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
+          <span className="text-xs text-muted-foreground">Minimum 8 characters</span>
           <ApiErrorText error={resetPassword.error} />
         </div>
         <DialogFooter>

@@ -41,7 +41,7 @@ export function MemberDetailDialog({ memberId, onOpenChange }: MemberDetailDialo
 
   return (
     <Dialog open={memberId !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Member details</DialogTitle>
           <DialogDescription className="sr-only">
@@ -78,7 +78,7 @@ export function MemberDetailDialog({ memberId, onOpenChange }: MemberDetailDialo
               />
             </div>
 
-            <dl className="grid grid-cols-2 gap-3 text-sm">
+            <dl className="grid grid-cols-3 gap-3 text-sm">
               <div>
                 <dt className="text-muted-foreground">Phone</dt>
                 <dd>
@@ -97,56 +97,56 @@ export function MemberDetailDialog({ memberId, onOpenChange }: MemberDetailDialo
 
             <Separator />
 
-            <div>
-              <h3 className="mb-2 text-sm font-medium">Activity recency by group</h3>
-              <MemberActivityChart memberships={memberships} />
-            </div>
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              <div>
+                <h3 className="mb-2 text-sm font-medium">Activity recency by group</h3>
+                <MemberActivityChart memberships={memberships} />
+              </div>
 
-            <Separator />
-
-            <div>
-              <h3 className="mb-2 text-sm font-medium">Activity by group</h3>
-              <ul className="flex flex-col gap-2">
-                {memberships.map((membership) => (
-                  <li
-                    key={membership.groupId}
-                    className="flex flex-col gap-2 rounded-lg border p-3 text-sm"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{membership.groupName}</p>
-                        <p className="truncate text-xs text-muted-foreground">{membership.communityName}</p>
-                        <p className="text-xs text-muted-foreground">Joined {formatDate(membership.joinedAt)}</p>
+              <div>
+                <h3 className="mb-2 text-sm font-medium">Activity by group</h3>
+                <ul className="flex max-h-60 flex-col gap-2 overflow-y-auto pr-1">
+                  {memberships.map((membership) => (
+                    <li
+                      key={membership.groupId}
+                      className="flex flex-col gap-2 rounded-lg border p-3 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{membership.groupName}</p>
+                          <p className="truncate text-xs text-muted-foreground">{membership.communityName}</p>
+                          <p className="text-xs text-muted-foreground">Joined {formatDate(membership.joinedAt)}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {membership.isAdmin ? (
+                            <Badge variant="secondary" className="gap-1">
+                              <ShieldCheck className="size-3" />
+                              Admin
+                            </Badge>
+                          ) : null}
+                          {membership.status === 'pending' ? <Badge>Pending</Badge> : null}
+                          <Link
+                            to="/c/$communityId/groups/$groupId"
+                            params={{ communityId: membership.communityId, groupId: membership.groupId }}
+                            search={{ tab: 'advanced' }}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            title="View raw metadata"
+                          >
+                            <Braces className="size-3.5" />
+                          </Link>
+                        </div>
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {membership.isAdmin ? (
-                          <Badge variant="secondary" className="gap-1">
-                            <ShieldCheck className="size-3" />
-                            Admin
-                          </Badge>
-                        ) : null}
-                        {membership.status === 'pending' ? <Badge>Pending</Badge> : null}
-                        <Link
-                          to="/c/$communityId/groups/$groupId"
-                          params={{ communityId: membership.communityId, groupId: membership.groupId }}
-                          search={{ tab: 'advanced' }}
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                          title="View raw metadata"
-                        >
-                          <Braces className="size-3.5" />
-                        </Link>
-                      </div>
-                    </div>
-                    <ActivityBar
-                      lastActivityType={membership.lastActivityType}
-                      lastActivityAt={membership.lastActivityAt}
-                      lastActivityContent={membership.lastActivityContent}
-                      truncateAt={null}
-                      showContentInline
-                    />
-                  </li>
-                ))}
-              </ul>
+                      <ActivityBar
+                        lastActivityType={membership.lastActivityType}
+                        lastActivityAt={membership.lastActivityAt}
+                        lastActivityContent={membership.lastActivityContent}
+                        truncateAt={null}
+                        showContentInline
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </div>
         )}

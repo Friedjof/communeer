@@ -1,5 +1,6 @@
 import { useNavigate } from '@tanstack/react-router'
 import { Loader2, MessageCircle } from 'lucide-react'
+import { useState } from 'react'
 import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,6 +17,26 @@ export function WhatsAppSetupPage() {
   const session = useSession()
   const isViewer = session.data?.role === 'viewer'
 
+  // `POST /whatsapp/connect` returns almost immediately (it only kicks off
+  // WPPConnect's own session startup, it doesn't wait for a QR code) — the
+  // status polling then sees `disconnected` for a few more seconds while
+  // the real session actually spins up. Without this, the button snaps back
+  // to its normal state right after the click with nothing else visible
+  // happening in between, which reads as "did that even do anything?". This
+  // keeps a loading state showing until the status genuinely moves on —
+  // reset during render (React's recommended "adjust state on a prop
+  // change" pattern) rather than in an effect, which would cost an extra
+  // commit for something derivable synchronously.
+  const [awaitingProgress, setAwaitingProgress] = useState(false)
+  const currentState = status.data?.state
+  const [lastObservedState, setLastObservedState] = useState(currentState)
+  if (currentState !== lastObservedState) {
+    setLastObservedState(currentState)
+    if (currentState && currentState !== 'disconnected') {
+      setAwaitingProgress(false)
+    }
+  }
+
   const connectError =
     connect.error instanceof ApiError ? connect.error.message : connect.error ? 'Something went wrong. Please try again.' : null
   const discoverError =
@@ -24,6 +45,13 @@ export function WhatsAppSetupPage() {
       : discoverAndSync.error
         ? 'Something went wrong. Please try again.'
         : null
+
+  function handleConnect() {
+    setAwaitingProgress(true)
+    connect.mutate(undefined, {
+      onError: () => setAwaitingProgress(false),
+    })
+  }
 
   function handleDiscover() {
     discoverAndSync.mutate(undefined, {
@@ -56,8 +84,8 @@ export function WhatsAppSetupPage() {
               state={status.data.state}
               detail={status.data.detail}
               qrCodeDataUrl={status.data.qrCodeDataUrl}
-              onConnect={() => connect.mutate()}
-              connectPending={connect.isPending}
+              onConnect={handleConnect}
+              connectPending={connect.isPending || awaitingProgress}
               connectError={connectError}
               onDiscover={handleDiscover}
               discoverPending={discoverAndSync.isPending}
@@ -116,8 +144,13 @@ function StatusBody({
         ) : null}
         <Button className="w-full gap-2" onClick={onConnect} disabled={connectPending || isViewer}>
           {connectPending ? <Loader2 className="size-4 animate-spin" /> : null}
-          {connectPending ? 'Connecting…' : 'Connect WhatsApp'}
+          {connectPending ? 'Starting session…' : 'Connect WhatsApp'}
         </Button>
+        {connectPending ? (
+          <p className="text-center text-xs text-muted-foreground">
+            This can take up to a minute before the QR code shows up.
+          </p>
+        ) : null}
         {isViewer ? (
           <p className="text-center text-sm text-muted-foreground">Your role doesn't have access to this.</p>
         ) : null}
@@ -161,9 +194,15 @@ function StatusBody({
           {discoverError}
         </p>
       ) : null}
-      <Button className="w-full" onClick={onDiscover} disabled={discoverPending || isViewer}>
+      <Button className="w-full gap-2" onClick={onDiscover} disabled={discoverPending || isViewer}>
+        {discoverPending ? <Loader2 className="size-4 animate-spin" /> : null}
         {discoverPending ? 'Discovering…' : 'Discover communities'}
       </Button>
+      {discoverPending ? (
+        <p className="text-center text-xs text-muted-foreground">
+          This can take a few minutes for communities with many groups or members — please keep this page open.
+        </p>
+      ) : null}
       {isViewer ? (
         <p className="text-center text-sm text-muted-foreground">Your role doesn't have access to this.</p>
       ) : null}

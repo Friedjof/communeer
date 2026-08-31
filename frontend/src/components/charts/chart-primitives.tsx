@@ -186,7 +186,7 @@ export function SnapshotTimeSeriesChart<T extends SnapshotPoint>({
               dataKey="memberCount"
               stroke="none"
               fill={`url(#${gradientId})`}
-              isAnimationActive={false}
+              isAnimationActive animationDuration={500}
             />
             <Line
               type="monotone"
@@ -195,7 +195,7 @@ export function SnapshotTimeSeriesChart<T extends SnapshotPoint>({
               strokeWidth={2}
               dot={{ r: 4, fill: 'var(--primary)', stroke: 'var(--card)', strokeWidth: 2 }}
               activeDot={{ r: 5, fill: 'var(--primary)', stroke: 'var(--card)', strokeWidth: 2 }}
-              isAnimationActive={false}
+              isAnimationActive animationDuration={500}
             />
             {extraLines}
           </ComposedChart>

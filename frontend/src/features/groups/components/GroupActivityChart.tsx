@@ -98,7 +98,7 @@ export function GroupActivityChart({ members }: { members: GroupMemberRow[] }) {
             allowDecimals={false}
           />
           <Tooltip content={ActivityTooltip} cursor={{ fill: 'var(--muted)', opacity: 0.5 }} />
-          <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+          <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]} isAnimationActive animationDuration={500} />
         </BarChart>
       </ResponsiveContainer>
     </div>

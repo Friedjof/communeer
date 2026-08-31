@@ -38,7 +38,7 @@ export function ModerationPage({ communityId }: ModerationPageProps) {
       ) : queue.isError || !queue.data ? (
         <ErrorState message={queue.error?.message} onRetry={() => queue.refetch()} />
       ) : (
-        <>
+        <div className="flex animate-in flex-col gap-4 fade-in duration-200">
           <AdminCoverageGapsSection communityId={communityId} gaps={queue.data.adminCoverageGaps} />
           <NeverActiveMembersSection
             communityId={communityId}
@@ -47,7 +47,7 @@ export function ModerationPage({ communityId }: ModerationPageProps) {
           />
           <JoinBurstsSection communityId={communityId} bursts={queue.data.joinBursts} />
           <CapacityAttentionSection communityId={communityId} groups={queue.data.capacityAttention} />
-        </>
+        </div>
       )}
 
       <MemberDetailDialog memberId={selectedMemberId} onOpenChange={(open) => !open && setSelectedMemberId(null)} />

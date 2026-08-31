@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { HelpTooltip } from '@/components/ui/help-tooltip'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSession } from '@/features/auth/queries'
 import { useDemoteGroupMember, usePromoteGroupMember, useRemoveGroupMember } from '@/features/groups/queries'
@@ -48,35 +49,41 @@ export function GroupMemberRowActions({ groupId, member }: GroupMemberRowActions
   return (
     <div className="flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
       {member.isAdmin ? (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Demote"
-          disabled={isBusy}
-          onClick={() => demote.mutate(member.memberId)}
-        >
-          <ShieldMinus className="size-4" />
-        </Button>
+        <HelpTooltip content="Remove this member's admin rights in the group">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Demote"
+            disabled={isBusy}
+            onClick={() => demote.mutate(member.memberId)}
+          >
+            <ShieldMinus className="size-4" />
+          </Button>
+        </HelpTooltip>
       ) : (
+        <HelpTooltip content="Make this member an admin in the group">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Promote"
+            disabled={isBusy}
+            onClick={() => promote.mutate(member.memberId)}
+          >
+            <ShieldPlus className="size-4" />
+          </Button>
+        </HelpTooltip>
+      )}
+      <HelpTooltip content="Remove this member from the group">
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="Promote"
+          aria-label="Remove"
           disabled={isBusy}
-          onClick={() => promote.mutate(member.memberId)}
+          onClick={() => setConfirmRemoveOpen(true)}
         >
-          <ShieldPlus className="size-4" />
+          <Trash2 className="size-4" />
         </Button>
-      )}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Remove"
-        disabled={isBusy}
-        onClick={() => setConfirmRemoveOpen(true)}
-      >
-        <Trash2 className="size-4" />
-      </Button>
+      </HelpTooltip>
 
       <Dialog open={confirmRemoveOpen} onOpenChange={setConfirmRemoveOpen}>
         <DialogContent onClick={(event) => event.stopPropagation()}>

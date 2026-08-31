@@ -56,7 +56,7 @@ export function GroupHistoryChart({ communityId, groupId }: GroupHistoryChartPro
           stroke="var(--warning)"
           strokeWidth={1.5}
           dot={false}
-          isAnimationActive={false}
+          isAnimationActive animationDuration={500}
         />
       }
     />

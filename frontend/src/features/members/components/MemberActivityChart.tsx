@@ -3,7 +3,6 @@ import { Activity } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { TooltipContentProps } from 'recharts'
 import { ChartTooltipShell, TruncatingYAxisTick } from '@/components/charts/chart-primitives'
-import { EmptyState } from '@/components/feedback/EmptyState'
 import { formatNumber } from '@/lib/format'
 import type { MemberMembership } from '../types'
 
@@ -49,11 +48,11 @@ export function MemberActivityChart({ memberships }: { memberships: MemberMember
 
   if (rows.length === 0) {
     return (
-      <EmptyState
-        icon={Activity}
-        title="No activity recorded yet"
-        description="This member hasn't posted, reacted, or been observed active in any of their groups."
-      />
+      <div className="flex h-[120px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed p-3 text-center">
+        <Activity className="size-5 text-muted-foreground" />
+        <p className="text-sm font-medium">No activity recorded yet</p>
+        <p className="text-xs text-muted-foreground">Nothing posted or observed in any group.</p>
+      </div>
     )
   }
 
@@ -80,7 +79,7 @@ export function MemberActivityChart({ memberships }: { memberships: MemberMember
             interval={0}
           />
           <Tooltip content={ActivityTooltip} cursor={{ fill: 'var(--muted)', opacity: 0.5 }} />
-          <Bar dataKey="daysAgo" fill="var(--primary)" radius={[0, 4, 4, 0]} isAnimationActive={false} maxBarSize={24} />
+          <Bar dataKey="daysAgo" fill="var(--primary)" radius={[0, 4, 4, 0]} isAnimationActive animationDuration={500} maxBarSize={24} />
         </BarChart>
       </ResponsiveContainer>
     </div>

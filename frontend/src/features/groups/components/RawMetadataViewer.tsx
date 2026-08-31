@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -49,14 +49,15 @@ function JsonNode({ label, value, depth, defaultOpen }: JsonNodeProps) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1 rounded py-0.5 font-mono text-xs hover:bg-muted/60"
+        className="flex w-full items-center gap-1 rounded py-0.5 font-mono text-xs transition-colors hover:bg-muted/60"
         style={{ paddingLeft: depth * 16 }}
       >
-        {open ? (
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
+        <ChevronRight
+          className={cn(
+            'size-3.5 shrink-0 text-muted-foreground transition-transform duration-150',
+            open && 'rotate-90',
+          )}
+        />
         <span className="text-muted-foreground">{label}:</span>
         {!open ? <span className="text-muted-foreground/70">{valuePreview(value)}</span> : null}
       </button>

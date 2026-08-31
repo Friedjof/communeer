@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { HelpTooltip } from '@/components/ui/help-tooltip'
 
 // A never-active-members list can genuinely have thousands of rows in a
 // real community — capping the stagger (same cap `DataTable.tsx` uses)
@@ -31,9 +32,11 @@ export function ModerationRow({ isDismissing, onDismiss, children, index = 0 }: 
       style={{ animationDelay: `${staggerIndex * 30}ms`, animationFillMode: 'backwards' }}
     >
       {children}
-      <Button variant="ghost" size="icon-sm" aria-label="Dismiss" disabled={isDismissing} onClick={onDismiss}>
-        <X className="size-4" />
-      </Button>
+      <HelpTooltip content="Dismiss until this gets worse">
+        <Button variant="ghost" size="icon-sm" aria-label="Dismiss" disabled={isDismissing} onClick={onDismiss}>
+          <X className="size-4" />
+        </Button>
+      </HelpTooltip>
     </li>
   )
 }

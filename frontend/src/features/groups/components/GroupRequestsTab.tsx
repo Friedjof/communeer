@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/feedback/EmptyState'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { HelpTooltip } from '@/components/ui/help-tooltip'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSession } from '@/features/auth/queries'
 import { formatDate, initials } from '@/lib/format'
@@ -68,24 +69,28 @@ export function GroupRequestsTab({ groupId }: GroupRequestsTabProps) {
                 <TableCell className="text-right">
                   {canManage ? (
                     <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Approve"
-                        disabled={isBusy}
-                        onClick={() => approve.mutate(request.memberId)}
-                      >
-                        <Check className="size-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Reject"
-                        disabled={isBusy}
-                        onClick={() => reject.mutate(request.memberId)}
-                      >
-                        <X className="size-4" />
-                      </Button>
+                      <HelpTooltip content="Approve this join request">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Approve"
+                          disabled={isBusy}
+                          onClick={() => approve.mutate(request.memberId)}
+                        >
+                          <Check className="size-4" />
+                        </Button>
+                      </HelpTooltip>
+                      <HelpTooltip content="Reject this join request">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Reject"
+                          disabled={isBusy}
+                          onClick={() => reject.mutate(request.memberId)}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      </HelpTooltip>
                     </div>
                   ) : (
                     <Tooltip>

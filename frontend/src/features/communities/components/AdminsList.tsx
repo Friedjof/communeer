@@ -21,8 +21,12 @@ export function AdminsList({ members }: AdminsListProps) {
 
   return (
     <ul className="flex flex-col gap-2">
-      {admins.map((member) => (
-        <li key={member.id} className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+      {admins.map((member, index) => (
+        <li
+          key={member.id}
+          className="flex animate-in items-center justify-between gap-3 rounded-lg border p-3 text-sm fade-in slide-in-from-bottom-1 duration-200"
+          style={{ animationDelay: `${Math.min(index, 8) * 30}ms`, animationFillMode: 'backwards' }}
+        >
           <div className="flex items-center gap-2.5">
             <Avatar className="size-8">
               {member.avatarUrl ? <AvatarImage src={member.avatarUrl} alt="" /> : null}
