@@ -55,6 +55,12 @@ from communeer.providers.whatsapp.base import (
     WhatsAppProviderUnavailableError,
 )
 from communeer.providers.whatsapp.wppconnect import WppconnectProvider
+from communeer.renewals.service import (
+    RENEWAL_CONFIRM_REACTION,
+    RENEWAL_DECLINE_REACTION,
+    apply_renewal_confirm_reaction,
+    apply_renewal_decline_reaction,
+)
 from communeer.sync.service import (
     CommunityNotFoundError,
     SyncInProgressError,
@@ -159,12 +165,44 @@ def _handle_onmessage(db: Session, payload: dict[str, Any]) -> None:
         db.commit()
 
 
+def _reacted_message_id(msg_id: Any) -> str | None:
+    """The id of the message a reaction was left on — `msgId._serialized`
+    (preferred) or its bare `id` field. Used to correlate a ❌ reaction back
+    to a renewal reminder DM (see `renewals/service.py`), independent of
+    whatever group/membership matching the caller does below."""
+    if not isinstance(msg_id, dict):
+        return None
+    serialized = msg_id.get("_serialized")
+    if isinstance(serialized, str) and serialized:
+        return serialized
+    raw_id = msg_id.get("id")
+    return raw_id if isinstance(raw_id, str) and raw_id else None
+
+
 def _handle_onreactionmessage(db: Session, payload: dict[str, Any]) -> None:
+    msg_id = payload.get("msgId")
+    reaction_text = payload.get("reactionText")
+    reacted_message_id = _reacted_message_id(msg_id)
+    # A renewal reminder is a direct message, not a group message — no
+    # group/membership matching applies to it, so this short-circuits before
+    # (and independent of) the group-activity logic below. If no confirmation
+    # matches, this reaction has nothing to do with a renewal (e.g. a plain
+    # 👍/❌ on a group message) — fall through as normal.
+    if reacted_message_id and reaction_text == RENEWAL_CONFIRM_REACTION and apply_renewal_confirm_reaction(
+        db, reacted_message_id
+    ):
+        return
+    if (
+        reacted_message_id
+        and reaction_text == RENEWAL_DECLINE_REACTION
+        and apply_renewal_decline_reaction(db, reacted_message_id)
+    ):
+        return
+
     sender_wa_id = _jid(payload.get("sender"))
     if not sender_wa_id:
         return
 
-    msg_id = payload.get("msgId")
     group_wa_id = _jid(msg_id.get("remote")) if isinstance(msg_id, dict) else None
 
     if group_wa_id:

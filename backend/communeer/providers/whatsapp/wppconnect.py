@@ -837,3 +837,96 @@ class WppconnectProvider(WhatsAppProvider):
     def set_member_admin(self, group_wa_id: str, member_wa_id: str, is_admin: bool) -> None:
         action = "promote-participant" if is_admin else "demote-participant"
         self._participant_write(action, group_wa_id, member_wa_id)
+
+    def send_text_message(self, member_wa_id: str, message: str) -> str | None:
+        """`send-message` is WPPConnect Server's most commonly documented
+        write endpoint (`{"phone", "message"}` body). **Confirmed live**
+        against a real server (2026-08-31): a successful call returns
+        `{"status": "success", "response": [{"id": "true_<chat>_<msgId>",
+        ...the full sent wa-js Message object}]}` — `response` is a
+        **list**, not a dict (the earlier defensive-dict-only probe here
+        missed it entirely and always fell through to `None`), and `id` is
+        already a plain string, not a nested `{"_serialized": ...}` object.
+        The `messageId`/`_serialized` keys and the bare-dict-response shape
+        are kept as fallbacks in case a different WPPConnect Server version
+        responds differently, but the list-of-one-dict shape above is the
+        verified case."""
+        self._require_connected()
+        try:
+            resp = self._authed_request(
+                "POST",
+                f"/api/{self._session_name}/send-message",
+                json={"phone": member_wa_id, "message": message},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
+        except ValueError:
+            return None
+
+        response = body.get("response") if isinstance(body, dict) else None
+        candidates: list[Any] = []
+        if isinstance(response, list):
+            candidates.extend(response)
+        else:
+            candidates.append(response)
+        candidates.append(body)
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key in ("id", "messageId", "_serialized"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value:
+                    return value
+                if isinstance(value, dict):
+                    serialized = value.get("_serialized")
+                    if isinstance(serialized, str) and serialized:
+                        return serialized
+        return None
+
+    def get_reaction_for_message(self, member_wa_id: str, message_id: str) -> str | None:
+        """**Unverified, exploratory** — same posture as this file's other
+        write methods, but with even less to go on: unlike `send-message`
+        (WPPConnect's best-documented endpoint), there's no confirmed
+        endpoint anywhere in this codebase's own research for reading a
+        reaction back on demand. This re-fetches the DM chat's recent
+        messages (the same `get-messages` shape `_fetch_last_message_by_author`
+        already trusts for groups) and looks for `message_id` carrying an
+        embedded `reactions` array — a real field on some wa-js message
+        payloads, but never confirmed present in a `get-messages` response
+        specifically. If real data shows this never appears, the fix is a
+        dedicated reactions endpoint here, not a caller-side change (the
+        raise-on-failure / `None`-means-no-reaction contract stays the same).
+        """
+        try:
+            resp = self._authed_request(
+                "GET",
+                f"/api/{self._session_name}/get-messages/{member_wa_id}",
+                params={"count": 50},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WhatsAppProviderUnavailableError(_safe_error_detail(exc)) from exc
+        messages = _unwrap_list_response(resp.json())
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if _participant_id(message) != message_id and message.get("id") != message_id:
+                continue
+            reactions = message.get("reactions")
+            if not isinstance(reactions, list):
+                return None
+            for reaction in reactions:
+                if not isinstance(reaction, dict):
+                    continue
+                reactor = self._jid_str(reaction.get("senderUserJid") or reaction.get("sender") or reaction.get("id"))
+                if reactor and reactor != member_wa_id:
+                    continue
+                text = reaction.get("reactionText") or reaction.get("text") or reaction.get("emoji")
+                if isinstance(text, str) and text:
+                    return text
+            return None
+        return None

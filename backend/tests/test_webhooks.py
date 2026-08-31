@@ -247,3 +247,143 @@ def test_webhook_onparticipantschanged_logs_and_returns_200_when_provider_unavai
 
     assert response.status_code == 200
     assert any("provider unavailable" in msg for msg in warning_calls)
+
+
+def _start_renewal_and_get_reminder_message_id(client) -> tuple[str, str, str]:
+    """Starts a renewal campaign for one Unity Alpha member (via the real
+    HTTP flow, so the mock provider actually "sends" a reminder and stamps
+    `reminder_message_id`), returning `(campaign_id, member_id, message_id)`.
+    `reminder_message_id` isn't exposed over the API by design — read
+    directly from the DB, same pattern other test files use for state the
+    wire contract doesn't need to expose."""
+    import uuid as uuid_module
+
+    from sqlalchemy import select
+
+    from communeer.db import SessionLocal
+    from communeer.models.renewal import RenewalConfirmation
+
+    _login(client)
+    communities = client.get("/api/v1/communities").json()
+    unity = next(c for c in communities if c["name"] == "Unity Alpha")
+    groups = client.get(f"/api/v1/communities/{unity['id']}/groups").json()
+    group_id = next(g["id"] for g in groups if g["name"] == "Marketplace")
+    suggestions = client.get(f"/api/v1/groups/{group_id}/renewals/suggestions").json()
+    suggestion = suggestions[0]
+    member_id = suggestion["memberId"]
+
+    create_response = client.post(
+        f"/api/v1/groups/{group_id}/renewals",
+        json={"memberIds": [member_id], "deadlineDays": 7},
+    )
+    assert create_response.status_code == 200
+    campaign_id = create_response.json()["id"]
+
+    db = SessionLocal()
+    try:
+        confirmation = db.execute(
+            select(RenewalConfirmation).where(
+                RenewalConfirmation.campaign_id == uuid_module.UUID(campaign_id),
+                RenewalConfirmation.member_id == uuid_module.UUID(member_id),
+            )
+        ).scalar_one()
+        message_id = confirmation.reminder_message_id
+    finally:
+        db.close()
+
+    assert message_id is not None, "mock provider must stamp a reminder_message_id on send"
+    return campaign_id, member_id, message_id
+
+
+def test_webhook_decline_reaction_on_reminder_message_sets_declined_and_expires(client):
+    campaign_id, member_id, message_id = _start_renewal_and_get_reminder_message_id(client)
+
+    payload = {
+        "event": "onreactionmessage",
+        "session": "communeer",
+        "id": {"fromMe": False, "remote": "unused", "id": "reaction-key-decline", "participant": None},
+        "msgId": {"fromMe": True, "remote": "unused", "id": message_id, "_serialized": message_id, "participant": None},
+        "reactionText": "❌",
+        "read": False,
+        "sender": "unused",
+        "orphan": 0,
+        "orphanReason": None,
+        "timestamp": int(datetime.now(UTC).timestamp()),
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+
+    detail = client.get(f"/api/v1/renewals/{campaign_id}").json()
+    confirmation = next(c for c in detail["confirmations"] if c["memberId"] == member_id)
+    assert confirmation["declinedAt"] is not None
+    assert confirmation["isExpired"] is True
+    assert confirmation["status"] == "pending"  # declining is not the same as confirming
+
+
+def test_webhook_confirm_reaction_on_reminder_message_confirms(client):
+    campaign_id, member_id, message_id = _start_renewal_and_get_reminder_message_id(client)
+
+    payload = {
+        "event": "onreactionmessage",
+        "session": "communeer",
+        "id": {"fromMe": False, "remote": "unused", "id": "reaction-key-thumbsup", "participant": None},
+        "msgId": {"fromMe": True, "remote": "unused", "id": message_id, "_serialized": message_id, "participant": None},
+        "reactionText": "👍",
+        "read": False,
+        "sender": "unused",
+        "orphan": 0,
+        "orphanReason": None,
+        "timestamp": int(datetime.now(UTC).timestamp()),
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+
+    detail = client.get(f"/api/v1/renewals/{campaign_id}").json()
+    confirmation = next(c for c in detail["confirmations"] if c["memberId"] == member_id)
+    assert confirmation["status"] == "confirmed"
+    assert confirmation["respondedAt"] is not None
+    assert confirmation["declinedAt"] is None
+    assert confirmation["isExpired"] is False
+
+
+def test_webhook_unrelated_reaction_on_reminder_message_does_nothing(client):
+    """A reaction that's neither the confirm nor decline emoji must leave
+    the confirmation completely untouched."""
+    campaign_id, member_id, message_id = _start_renewal_and_get_reminder_message_id(client)
+
+    payload = {
+        "event": "onreactionmessage",
+        "session": "communeer",
+        "id": {"fromMe": False, "remote": "unused", "id": "reaction-key-party", "participant": None},
+        "msgId": {"fromMe": True, "remote": "unused", "id": message_id, "_serialized": message_id, "participant": None},
+        "reactionText": "🎉",
+        "read": False,
+        "sender": "unused",
+        "orphan": 0,
+        "orphanReason": None,
+        "timestamp": int(datetime.now(UTC).timestamp()),
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+
+    detail = client.get(f"/api/v1/renewals/{campaign_id}").json()
+    confirmation = next(c for c in detail["confirmations"] if c["memberId"] == member_id)
+    assert confirmation["status"] == "pending"
+    assert confirmation["declinedAt"] is None
+    assert confirmation["isExpired"] is False
+
+
+def test_webhook_decline_reaction_with_unknown_message_id_is_a_safe_noop(client):
+    response = client.post(
+        f"/api/v1/webhooks/wppconnect/{TEST_SECRET}",
+        json={
+            "event": "onreactionmessage",
+            "session": "communeer",
+            "id": {"fromMe": False, "remote": "unused", "id": "reaction-key-x", "participant": None},
+            "msgId": {"fromMe": True, "remote": "unused", "id": "no-such-message", "_serialized": "no-such-message"},
+            "reactionText": "❌",
+            "sender": "unused",
+            "timestamp": int(datetime.now(UTC).timestamp()),
+        },
+    )
+    assert response.status_code == 200

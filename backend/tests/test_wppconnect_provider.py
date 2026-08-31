@@ -759,3 +759,59 @@ def test_get_group_invite_link_returns_none_on_transport_error():
     provider = _provider()
 
     assert provider.get_group_invite_link(GENERAL_WA_ID) is None
+
+
+def _send_message_url(session: str = SESSION) -> str:
+    return f"{BASE_URL}/api/{session}/send-message"
+
+
+@respx.mock
+def test_send_text_message_extracts_id_from_real_confirmed_response_shape():
+    """The exact response shape confirmed live against a real WPPConnect
+    Server (2026-08-31): `response` is a list containing the full sent
+    message object, with a plain-string `id` — not a bare dict, and not a
+    nested `{"_serialized": ...}` object, both of which an earlier version
+    of this method's extraction logic assumed and so always missed."""
+    _mock_token_and_connected(respx.mock)
+    respx.mock.post(_send_message_url()).respond(
+        201,
+        json={
+            "status": "success",
+            "response": [
+                {
+                    "id": "true_228007130198135@lid_3EB068D9C450763680E0D5",
+                    "body": "hello",
+                    "type": "chat",
+                    "fromMe": True,
+                    "chatId": "228007130198135@lid",
+                }
+            ],
+        },
+    )
+
+    provider = _provider()
+
+    message_id = provider.send_text_message("228007130198135@lid", "hello")
+
+    assert message_id == "true_228007130198135@lid_3EB068D9C450763680E0D5"
+
+
+@respx.mock
+def test_send_text_message_returns_none_when_no_id_found():
+    _mock_token_and_connected(respx.mock)
+    respx.mock.post(_send_message_url()).respond(201, json={"status": "success", "response": []})
+
+    provider = _provider()
+
+    assert provider.send_text_message("228007130198135@lid", "hello") is None
+
+
+@respx.mock
+def test_send_text_message_raises_on_transport_error():
+    _mock_token_and_connected(respx.mock)
+    respx.mock.post(_send_message_url()).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    provider = _provider()
+
+    with pytest.raises(WhatsAppProviderUnavailableError):
+        provider.send_text_message("228007130198135@lid", "hello")

@@ -248,3 +248,30 @@ class WhatsAppProvider(ABC):
 
         Same raise-on-failure contract as `approve_join_request`.
         """
+
+    @abstractmethod
+    def get_reaction_for_message(self, member_wa_id: str, message_id: str) -> str | None:
+        """Best-effort, on-demand check of whatever reaction `member_wa_id`
+        has currently left on the message `message_id` (a message this
+        provider itself sent, via `send_text_message`) — a pull-based
+        alternative to waiting for the inbound reaction webhook, for a
+        caller that wants an answer right now rather than whenever (or if)
+        the webhook fires. Returns the reaction emoji/text, or `None` if
+        there is no reaction (or the message/reaction can't be found).
+
+        Same raise-on-failure contract as `approve_join_request` — a
+        transport failure is a real error, not "no reaction yet".
+        """
+
+    @abstractmethod
+    def send_text_message(self, member_wa_id: str, message: str) -> str | None:
+        """Send a direct text message to a member's personal WhatsApp chat
+        (not a group message).
+
+        Returns the provider's id for the sent message, if it supplies one —
+        used to correlate a later reaction on that message back to whatever
+        triggered the send (see `renewals/service.py`'s reminder flow). `None`
+        if the provider succeeded but couldn't supply a usable id.
+
+        Same raise-on-failure contract as `approve_join_request`.
+        """

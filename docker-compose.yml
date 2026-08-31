@@ -59,6 +59,21 @@ services:
   wppconnect:
     image: wppconnect/wppconnect-server:${WPP_SERVER_TAG:-latest}
     restart: unless-stopped
+    # Chromium's `SingletonLock`/`SingletonCookie`/`SingletonSocket` (in its
+    # persisted user-data-dir volume) reference the *previous* container's
+    # hostname — a container recreate (not just an in-place process restart)
+    # always leaves a stale lock behind, since there's no previous-container
+    # process left to release it. Chromium then refuses to launch at all
+    # ("Failed to launch the browser process: Code: 21 ... profile appears
+    # to be in use by another Chromium process"), observed live on every
+    # `docker compose up`/rebuild during development. Clearing those three
+    # files (never the real session/token data) before every start is safe
+    # whether or not they exist, and makes every future redeploy work
+    # without a manual fix.
+    entrypoint:
+      - sh
+      - -c
+      - "find /usr/src/wpp-server/userDataDir -maxdepth 2 -name 'Singleton*' -delete 2>/dev/null; exec node dist/server.js"
     environment:
       PORT: "21465"
       SECRET_KEY: ${WPPCONNECT_SECRET_KEY:?set in .env}

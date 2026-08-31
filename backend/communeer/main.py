@@ -77,7 +77,7 @@ def _seed_and_prime_data() -> None:
 
         try:
             for provider_community in provider.get_communities():
-                sync_community(db, provider, provider_community.wa_id)
+                sync_community(db, provider, provider_community.wa_id, provider_community=provider_community)
         except WhatsAppNotConnectedError:
             # A real session can drop mid-loop; don't let that crash the
             # whole lifespan — whatever was already synced stays synced.

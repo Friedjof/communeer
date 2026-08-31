@@ -501,6 +501,14 @@ class MockWhatsAppProvider(WhatsAppProvider):
         self._community_by_group_wa_id = {
             g.wa_id: c for c in self._communities for g in c.groups
         }
+        # Sent direct messages, kept only for test/introspection purposes —
+        # nothing in this codebase reads it back at runtime.
+        self._sent_messages: list[tuple[str, str]] = []
+        # Reactions on sent messages, keyed by message id — nothing ever
+        # populates this in mock mode on its own (there's no real WhatsApp to
+        # react from); tests call `simulate_reaction()` to exercise the
+        # "check reactions" pull path without a live webhook.
+        self._reactions: dict[str, str] = {}
 
     def get_communities(self) -> list[ProviderCommunity]:
         return list(self._communities)
@@ -604,3 +612,14 @@ class MockWhatsAppProvider(WhatsAppProvider):
         group = self._get_group_or_raise(group_wa_id)
         index = self._find_membership_index(group, member_wa_id)
         group.memberships[index] = group.memberships[index].model_copy(update={"is_admin": is_admin})
+
+    def send_text_message(self, member_wa_id: str, message: str) -> str | None:
+        self._sent_messages.append((member_wa_id, message))
+        return f"mock-msg-{len(self._sent_messages)}"
+
+    def get_reaction_for_message(self, member_wa_id: str, message_id: str) -> str | None:
+        return self._reactions.get(message_id)
+
+    def simulate_reaction(self, message_id: str, reaction: str) -> None:
+        """Test-only hook — see `self._reactions`'s docstring above."""
+        self._reactions[message_id] = reaction

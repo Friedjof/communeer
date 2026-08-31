@@ -60,7 +60,13 @@ def discover_and_sync(
     try:
         provider_communities = provider.get_communities()
         synced = [
-            sync_community(db, provider, provider_community.wa_id, actor_user_id=user.id)
+            sync_community(
+                db,
+                provider,
+                provider_community.wa_id,
+                actor_user_id=user.id,
+                provider_community=provider_community,
+            )
             for provider_community in provider_communities
         ]
     except WhatsAppNotConnectedError as exc:

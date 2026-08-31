@@ -34,7 +34,11 @@ from communeer.models import (
     MembershipStatus,
 )
 from communeer.models.base import new_uuid
-from communeer.providers.whatsapp.base import ProviderMember, WhatsAppProvider
+from communeer.providers.whatsapp.base import (
+    ProviderCommunity,
+    ProviderMember,
+    WhatsAppProvider,
+)
 
 
 class CommunityNotFoundError(Exception):
@@ -120,12 +124,24 @@ def sync_community(
     provider: WhatsAppProvider,
     community_wa_id: str,
     actor_user_id: uuid.UUID | None = None,
+    provider_community: ProviderCommunity | None = None,
 ) -> Community:
     """Thin wrapper around `_sync_community_impl`: turns a concurrent-sync
     collision (see `SyncInProgressError` above) into a clean, catchable error
-    instead of letting the raw `IntegrityError` propagate as a generic 500."""
+    instead of letting the raw `IntegrityError` propagate as a generic 500.
+
+    `provider_community`: pass an already-fetched, fully-hydrated
+    `ProviderCommunity` (e.g. one of `provider.get_communities()`'s results)
+    to skip a redundant `provider.get_community(community_wa_id)` call —
+    for the real WPPConnect provider, that call re-does the full, expensive
+    per-group members/admins/messages fan-out (see that provider's own
+    module docstring), so re-fetching a community that was just fetched a
+    moment ago (as `discover_and_sync` and the boot-time priming loop both
+    do) doubles real WhatsApp API cost for no benefit. Omit it (the default)
+    when the caller only has a `wa_id`, e.g. the per-community "Sync now"
+    button or a webhook-triggered resync."""
     try:
-        return _sync_community_impl(db, provider, community_wa_id, actor_user_id)
+        return _sync_community_impl(db, provider, community_wa_id, actor_user_id, provider_community)
     except IntegrityError as exc:
         db.rollback()
         raise SyncInProgressError(community_wa_id) from exc
@@ -136,8 +152,10 @@ def _sync_community_impl(
     provider: WhatsAppProvider,
     community_wa_id: str,
     actor_user_id: uuid.UUID | None = None,
+    provider_community: ProviderCommunity | None = None,
 ) -> Community:
-    provider_community = provider.get_community(community_wa_id)
+    if provider_community is None:
+        provider_community = provider.get_community(community_wa_id)
     if provider_community is None:
         raise CommunityNotFoundError(community_wa_id)
 

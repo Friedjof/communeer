@@ -182,6 +182,12 @@ def test_sync_stamps_joined_at_once_and_never_blanks_it(db_session):
         def set_member_admin(self, group_wa_id, member_wa_id, is_admin):
             raise NotImplementedError
 
+        def send_text_message(self, member_wa_id, message):
+            raise NotImplementedError
+
+        def get_reaction_for_message(self, member_wa_id, message_id):
+            raise NotImplementedError
+
         def _community(self) -> ProviderCommunity:
             member = ProviderMember(
                 wa_id=member_wa_id,
@@ -269,6 +275,12 @@ def test_sync_stamps_last_message_at_forward_only_never_regresses_or_blanks(db_s
             raise NotImplementedError
 
         def set_member_admin(self, group_wa_id, member_wa_id, is_admin):
+            raise NotImplementedError
+
+        def send_text_message(self, member_wa_id, message):
+            raise NotImplementedError
+
+        def get_reaction_for_message(self, member_wa_id, message_id):
             raise NotImplementedError
 
         def _community(self) -> ProviderCommunity:
@@ -382,6 +394,12 @@ def test_sync_stamps_unified_last_activity_from_chat_history_forward_only(db_ses
             raise NotImplementedError
 
         def set_member_admin(self, group_wa_id, member_wa_id, is_admin):
+            raise NotImplementedError
+
+        def send_text_message(self, member_wa_id, message):
+            raise NotImplementedError
+
+        def get_reaction_for_message(self, member_wa_id, message_id):
             raise NotImplementedError
 
         def _community(self) -> ProviderCommunity:

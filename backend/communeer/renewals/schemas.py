@@ -24,14 +24,15 @@ class RenewalSuggestionOut(CamelModel):
     display_name: str
     avatar_url: str | None
     phone_number_masked: str | None
-    group_count: int
     joined_at: datetime | None
-    # Real activity signals, aggregated across this member's groups in this
-    # community (same aggregation as `MemberSummaryOut`). `last_message_at`
-    # is a real, provider-observed signal for WPPConnect. `last_seen_at` is
-    # almost always `None` in practice — WhatsApp doesn't expose presence
-    # data for most accounts (verified live against real group members) —
-    # the frontend renders that as "not available", not "unknown".
+    # Real activity signals, straight off this member's `GroupMembership` row
+    # for the one group a renewal round is scoped to (same fields
+    # `MemberSummaryOut` exposes, just not aggregated across groups anymore).
+    # `last_message_at` is a real, provider-observed signal for WPPConnect.
+    # `last_seen_at` is almost always `None` in practice — WhatsApp doesn't
+    # expose presence data for most accounts (verified live against real
+    # group members) — the frontend renders that as "not available", not
+    # "unknown".
     last_message_at: datetime | None
     last_seen_at: datetime | None
     last_activity_type: ActivityType | None
@@ -46,13 +47,14 @@ class CreateRenewalCampaignIn(CamelModel):
 
 class RenewalCampaignSummaryOut(CamelModel):
     id: uuid.UUID
-    community_id: uuid.UUID
+    group_id: uuid.UUID
     started_at: datetime
     deadline: datetime
     pending_count: int
     confirmed_count: int
     expired_count: int
     total_count: int
+    archived_at: datetime | None
 
 
 class RenewalConfirmationOut(CamelModel):
@@ -62,6 +64,9 @@ class RenewalConfirmationOut(CamelModel):
     status: RenewalConfirmationStatus
     is_expired: bool
     responded_at: datetime | None
+    reminder_sent_at: datetime | None
+    declined_at: datetime | None
+    removed_at: datetime | None
 
 
 class RenewalCampaignDetailOut(RenewalCampaignSummaryOut):
