@@ -14,12 +14,12 @@ import type { RenewalSuggestion } from '../types'
 import { StartRenewalDialog } from './StartRenewalDialog'
 
 interface StartRenewalSectionProps {
-  communityId: string
+  groupId: string
   onCampaignCreated: (campaignId: string) => void
 }
 
-export function StartRenewalSection({ communityId, onCampaignCreated }: StartRenewalSectionProps) {
-  const suggestions = useRenewalSuggestions(communityId)
+export function StartRenewalSection({ groupId, onCampaignCreated }: StartRenewalSectionProps) {
+  const suggestions = useRenewalSuggestions(groupId)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [dialogOpen, setDialogOpen] = useState(false)
   const session = useSession()
@@ -107,7 +107,7 @@ export function StartRenewalSection({ communityId, onCampaignCreated }: StartRen
       <CardContent>{body}</CardContent>
 
       <StartRenewalDialog
-        communityId={communityId}
+        groupId={groupId}
         members={selectedMembers}
         open={dialogOpen}
         onOpenChange={setDialogOpen}

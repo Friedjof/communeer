@@ -33,7 +33,6 @@ describe('MainNavigation', () => {
     expect(screen.queryByText('Audit log')).not.toBeInTheDocument()
     expect(screen.getByText('Overview')).toBeInTheDocument()
     expect(screen.getByText('Members')).toBeInTheDocument()
-    expect(screen.getByText('Renewals')).toBeInTheDocument()
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 

@@ -12,7 +12,7 @@ const columnHelper = createColumnHelper<RenewalSuggestion>()
 
 /**
  * Suggestion table columns, parameterized by the current selection so
- * checkbox state lives in the parent (`RenewalsPage`/`StartRenewalSection`)
+ * checkbox state lives in the parent (`GroupRenewalsTab`/`StartRenewalSection`)
  * rather than inside the table itself.
  */
 export function useSuggestionColumns(
@@ -57,10 +57,6 @@ export function useSuggestionColumns(
       columnHelper.accessor('phoneNumberMasked', {
         header: 'Phone',
         cell: (info) => <MaskedPhone value={info.getValue()} />,
-      }),
-      columnHelper.accessor('groupCount', {
-        header: 'Groups',
-        cell: (info) => <span className="tabular-nums">{info.getValue()}</span>,
       }),
       columnHelper.accessor('joinedAt', {
         header: 'Joined',

@@ -1,18 +1,23 @@
 /**
- * Renewal campaigns are a manual-tracking tool: the admin posts the
- * "please confirm you still live here" message in WhatsApp themselves, and
- * marks people confirmed here after observing their reply/reaction.
- * Communeer never sends messages or detects reactions automatically.
+ * Renewal campaigns are scoped to a single group (a member can belong to
+ * several groups in the same community, and a renewal round only ever
+ * concerns their standing in one of them). Starting one sends a bilingual
+ * (German/English) reminder DM to every selected member, and reacting ❌ to
+ * that message is read automatically and treated as an immediate decline
+ * (see `declinedAt`). Confirming is still a manual step — an admin marks
+ * someone confirmed after seeing their reply. Removal from the group is also
+ * manual: an admin clicks "Process removals" to remove everyone currently
+ * declined or past the deadline in one batch (see `removedAt`) — nothing
+ * removes anyone automatically.
  */
 
-/** A candidate for a renewal round. The backend already excludes admins. */
+/** A candidate for a renewal round. The backend already excludes this group's admins. */
 export interface RenewalSuggestion {
   memberId: string
   waId: string
   displayName: string
   avatarUrl: string | null
   phoneNumberMasked: string
-  groupCount: number
   joinedAt: string | null
   /**
    * Last time this member actually posted a message, aggregated from real
@@ -33,13 +38,16 @@ export interface RenewalSuggestion {
 /** Summary counters for one campaign, as returned by list/detail/create endpoints. */
 export interface RenewalCampaignSummary {
   id: string
-  communityId: string
+  groupId: string
   startedAt: string
   deadline: string
   pendingCount: number
   confirmedCount: number
   expiredCount: number
   totalCount: number
+  /** Set once an admin archives the campaign — never set automatically, even
+   * when `totalCount` reaches zero. Only an archived campaign can be deleted. */
+  archivedAt: string | null
 }
 
 export type RenewalConfirmationStatus = 'pending' | 'confirmed'
@@ -57,6 +65,17 @@ export interface RenewalConfirmation {
   status: RenewalConfirmationStatus
   isExpired: boolean
   respondedAt: string | null
+  /** When the bilingual reminder DM was last (re)sent — `null` means it
+   * hasn't gone out yet (never attempted, or the attempt failed). */
+  reminderSentAt: string | null
+  /** Set the moment the member reacts ❌ to the reminder — an explicit
+   * "no longer interested" signal, distinct from simply missing the
+   * deadline (though both make `isExpired` true). */
+  declinedAt: string | null
+  /** Set once "Process removals" has actually removed this member from the
+   * campaign's group — `null` means they're still in the group, whether or
+   * not they're currently declined/expired. */
+  removedAt: string | null
 }
 
 export interface RenewalCampaignDetail extends RenewalCampaignSummary {

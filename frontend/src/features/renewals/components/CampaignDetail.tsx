@@ -1,177 +1,28 @@
-import { AlertTriangle, CheckCircle2, Clock } from 'lucide-react'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { RefreshCw, Sparkles, UserX } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { HelpTooltip } from '@/components/ui/help-tooltip'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { EmptyState } from '@/components/feedback/EmptyState'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { ListSkeleton } from '@/components/feedback/LoadingSkeletons'
 import { useSession } from '@/features/auth/queries'
-import { formatDate, initials } from '@/lib/format'
-import { useConfirmRenewal, useNonResponders, useRenewalCampaign } from '../queries'
-import type { RenewalConfirmation } from '../types'
+import { formatDate } from '@/lib/format'
+import { useCheckRenewalReactions, useProcessDueRemovals, useRenewalCampaign } from '../queries'
+import { ConfirmationsTable } from './ConfirmationsTable'
+import { NonRespondersTab } from './NonRespondersTab'
 
 interface CampaignDetailProps {
   campaignId: string
 }
 
-function StatusCell({ confirmation }: { confirmation: RenewalConfirmation }) {
-  if (confirmation.status === 'confirmed') {
-    return (
-      <Badge variant="secondary" className="gap-1">
-        <CheckCircle2 className="size-3" />
-        Confirmed
-      </Badge>
-    )
-  }
-  if (confirmation.isExpired) {
-    return (
-      <Badge className="gap-1 bg-warning text-warning-foreground">
-        <AlertTriangle className="size-3" />
-        Pending — overdue
-      </Badge>
-    )
-  }
-  return (
-    <Badge variant="outline" className="gap-1 text-muted-foreground">
-      <Clock className="size-3" />
-      Pending
-    </Badge>
-  )
-}
-
-function MemberIdentity({ displayName, waId }: { displayName: string; waId: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <Avatar className="size-8">
-        <AvatarFallback className="text-xs">{initials(displayName)}</AvatarFallback>
-      </Avatar>
-      <div className="flex flex-col">
-        <span className="font-medium leading-tight">{displayName}</span>
-        <span className="text-xs text-muted-foreground leading-tight">{waId}</span>
-      </div>
-    </div>
-  )
-}
-
-function ConfirmationsTable({ campaignId, confirmations }: { campaignId: string; confirmations: RenewalConfirmation[] }) {
-  const confirmRenewal = useConfirmRenewal(campaignId)
-  const session = useSession()
-  const isViewer = session.data?.role === 'viewer'
-
-  if (confirmations.length === 0) {
-    return <EmptyState title="No members in this campaign" />
-  }
-
-  return (
-    <div className="overflow-x-auto rounded-lg border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Member</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Responded</TableHead>
-            <TableHead className="text-right">Action</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {confirmations.map((confirmation) => (
-            <TableRow key={confirmation.memberId}>
-              <TableCell>
-                <MemberIdentity displayName={confirmation.displayName} waId={confirmation.waId} />
-              </TableCell>
-              <TableCell>
-                <StatusCell confirmation={confirmation} />
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">{formatDate(confirmation.respondedAt)}</TableCell>
-              <TableCell className="text-right">
-                {confirmation.status === 'pending' ? (
-                  isViewer ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span>
-                          <Button size="sm" variant="outline" disabled>
-                            Mark confirmed
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>Your role doesn't have access to this</TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={confirmRenewal.isPending && confirmRenewal.variables === confirmation.memberId}
-                      onClick={() => confirmRenewal.mutate(confirmation.memberId)}
-                    >
-                      {confirmRenewal.isPending && confirmRenewal.variables === confirmation.memberId
-                        ? 'Marking…'
-                        : 'Mark confirmed'}
-                    </Button>
-                  )
-                ) : null}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-function NonRespondersTab({ campaignId }: { campaignId: string }) {
-  const nonResponders = useNonResponders(campaignId)
-
-  if (nonResponders.isPending) {
-    return <ListSkeleton count={3} />
-  }
-  if (nonResponders.isError || !nonResponders.data) {
-    return <ErrorState message={nonResponders.error?.message} onRetry={() => nonResponders.refetch()} />
-  }
-  if (nonResponders.data.length === 0) {
-    return <EmptyState title="Nobody is overdue yet" description="Members show up here once the deadline passes without a confirmation." />
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
-        <p>
-          These members missed the deadline without confirming. Removal is <strong>manual</strong> — review each
-          person, confirm in WhatsApp, then remove them there yourself. There is no remove button here by design.
-        </p>
-      </div>
-      <div className="overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Member</TableHead>
-              <TableHead>Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {nonResponders.data.map((confirmation) => (
-              <TableRow key={confirmation.memberId}>
-                <TableCell>
-                  <MemberIdentity displayName={confirmation.displayName} waId={confirmation.waId} />
-                </TableCell>
-                <TableCell>
-                  <StatusCell confirmation={confirmation} />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
-  )
-}
-
 export function CampaignDetail({ campaignId }: CampaignDetailProps) {
   const campaign = useRenewalCampaign(campaignId)
+  const checkReactions = useCheckRenewalReactions(campaignId)
+  const processRemovals = useProcessDueRemovals(campaignId)
+  const session = useSession()
+  const isViewer = session.data?.role === 'viewer'
 
   if (campaign.isPending) {
     return <ListSkeleton count={4} />
@@ -183,10 +34,14 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
   const data = campaign.data
 
   return (
-    <Card>
+    <Card className="animate-in fade-in duration-200">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-        <CardTitle className="text-base">
+        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
           Campaign started {formatDate(data.startedAt)} — deadline {formatDate(data.deadline)}
+          <Badge variant="secondary" className="gap-1">
+            <Sparkles className="size-3" />
+            Automated
+          </Badge>
         </CardTitle>
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="secondary">{data.confirmedCount} confirmed</Badge>
@@ -194,8 +49,71 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
           {data.expiredCount > 0 ? (
             <Badge className="bg-warning text-warning-foreground">{data.expiredCount} overdue</Badge>
           ) : null}
+          {isViewer ? (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button variant="outline" size="sm" className="gap-1.5" disabled>
+                      <RefreshCw className="size-3.5" />
+                      Check reactions
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>Your role doesn't have access to this</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button variant="outline" size="sm" className="gap-1.5" disabled>
+                      <UserX className="size-3.5" />
+                      Process removals
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>Your role doesn't have access to this</TooltipContent>
+              </Tooltip>
+            </>
+          ) : (
+            <>
+              <HelpTooltip content="Ask WhatsApp for the latest reactions right now">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={checkReactions.isPending}
+                  onClick={() => checkReactions.mutate()}
+                >
+                  <RefreshCw className={checkReactions.isPending ? 'size-3.5 animate-spin' : 'size-3.5'} />
+                  {checkReactions.isPending ? 'Checking…' : 'Check reactions'}
+                </Button>
+              </HelpTooltip>
+              <HelpTooltip content="Remove everyone who declined or missed the deadline from this group">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={processRemovals.isPending}
+                  onClick={() => processRemovals.mutate()}
+                >
+                  <UserX className="size-3.5" />
+                  {processRemovals.isPending ? 'Removing…' : 'Process removals'}
+                </Button>
+              </HelpTooltip>
+            </>
+          )}
         </div>
       </CardHeader>
+      {checkReactions.error ? (
+        <p role="alert" className="px-6 text-sm text-destructive">
+          {checkReactions.error.message}
+        </p>
+      ) : null}
+      {processRemovals.error ? (
+        <p role="alert" className="px-6 text-sm text-destructive">
+          {processRemovals.error.message}
+        </p>
+      ) : null}
       <CardContent>
         <Tabs defaultValue="all">
           <TabsList>

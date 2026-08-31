@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from '@/api/client'
+import { apiDelete, apiGet, apiPost } from '@/api/client'
 import type {
   CreateRenewalCampaignInput,
   RenewalCampaignDetail,
@@ -7,19 +7,19 @@ import type {
   RenewalSuggestion,
 } from './types'
 
-export function getRenewalSuggestions(communityId: string): Promise<RenewalSuggestion[]> {
-  return apiGet<RenewalSuggestion[]>(`/communities/${communityId}/renewals/suggestions`)
+export function getRenewalSuggestions(groupId: string): Promise<RenewalSuggestion[]> {
+  return apiGet<RenewalSuggestion[]>(`/groups/${groupId}/renewals/suggestions`)
 }
 
 export function createRenewalCampaign(
-  communityId: string,
+  groupId: string,
   input: CreateRenewalCampaignInput,
 ): Promise<RenewalCampaignSummary> {
-  return apiPost<RenewalCampaignSummary>(`/communities/${communityId}/renewals`, input)
+  return apiPost<RenewalCampaignSummary>(`/groups/${groupId}/renewals`, input)
 }
 
-export function getRenewalCampaigns(communityId: string): Promise<RenewalCampaignSummary[]> {
-  return apiGet<RenewalCampaignSummary[]>(`/communities/${communityId}/renewals`)
+export function getRenewalCampaigns(groupId: string): Promise<RenewalCampaignSummary[]> {
+  return apiGet<RenewalCampaignSummary[]>(`/groups/${groupId}/renewals`)
 }
 
 export function getRenewalCampaign(campaignId: string): Promise<RenewalCampaignDetail> {
@@ -32,4 +32,32 @@ export function confirmRenewal(campaignId: string, memberId: string): Promise<Re
 
 export function getNonResponders(campaignId: string): Promise<RenewalConfirmation[]> {
   return apiGet<RenewalConfirmation[]>(`/renewals/${campaignId}/non-responders`)
+}
+
+export function sendRenewalReminder(campaignId: string, memberId: string): Promise<RenewalConfirmation> {
+  return apiPost<RenewalConfirmation>(`/renewals/${campaignId}/confirmations/${memberId}/send-reminder`)
+}
+
+export function removeFromCampaign(campaignId: string, memberId: string): Promise<void> {
+  return apiPost<void>(`/renewals/${campaignId}/confirmations/${memberId}/remove`)
+}
+
+export function checkRenewalReactions(campaignId: string): Promise<RenewalCampaignDetail> {
+  return apiPost<RenewalCampaignDetail>(`/renewals/${campaignId}/check-reactions`)
+}
+
+export function archiveCampaign(campaignId: string): Promise<RenewalCampaignSummary> {
+  return apiPost<RenewalCampaignSummary>(`/renewals/${campaignId}/archive`)
+}
+
+export function unarchiveCampaign(campaignId: string): Promise<RenewalCampaignSummary> {
+  return apiPost<RenewalCampaignSummary>(`/renewals/${campaignId}/unarchive`)
+}
+
+export function deleteCampaign(campaignId: string): Promise<void> {
+  return apiDelete<void>(`/renewals/${campaignId}`)
+}
+
+export function processDueRemovals(campaignId: string): Promise<RenewalCampaignDetail> {
+  return apiPost<RenewalCampaignDetail>(`/renewals/${campaignId}/process-removals`)
 }

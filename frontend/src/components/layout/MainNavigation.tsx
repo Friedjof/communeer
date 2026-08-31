@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { LayoutDashboard, ScrollText, Settings, ShieldAlert, UserCheck, Users } from 'lucide-react'
+import { LayoutDashboard, ScrollText, Settings, ShieldAlert, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/lib/uiStore'
 import { useSession } from '@/features/auth/queries'
@@ -41,15 +41,6 @@ export function MainNavigation({ communityId, className, onNavigate }: MainNavig
           >
             <Users className="size-4" />
             Members
-          </Link>
-          <Link
-            to="/c/$communityId/renewals"
-            params={{ communityId: activeCommunityId }}
-            className={linkClass}
-            onClick={onNavigate}
-          >
-            <UserCheck className="size-4" />
-            Renewals
           </Link>
           {isViewer ? null : (
             <Link

@@ -5,10 +5,23 @@ import type { SessionUser } from '@/features/auth/types'
 import { CampaignDetail } from './CampaignDetail'
 import type { RenewalCampaignDetail } from '../types'
 
-const { useSessionMock, useRenewalCampaignMock, useConfirmRenewalMock, useNonRespondersMock } = vi.hoisted(() => ({
+const {
+  useSessionMock,
+  useRenewalCampaignMock,
+  useConfirmRenewalMock,
+  useSendRenewalReminderMock,
+  useRemoveFromCampaignMock,
+  useCheckRenewalReactionsMock,
+  useProcessDueRemovalsMock,
+  useNonRespondersMock,
+} = vi.hoisted(() => ({
   useSessionMock: vi.fn(),
   useRenewalCampaignMock: vi.fn(),
   useConfirmRenewalMock: vi.fn(),
+  useSendRenewalReminderMock: vi.fn(),
+  useRemoveFromCampaignMock: vi.fn(),
+  useCheckRenewalReactionsMock: vi.fn(),
+  useProcessDueRemovalsMock: vi.fn(),
   useNonRespondersMock: vi.fn(),
 }))
 
@@ -19,18 +32,23 @@ vi.mock('@/features/auth/queries', () => ({
 vi.mock('../queries', () => ({
   useRenewalCampaign: useRenewalCampaignMock,
   useConfirmRenewal: useConfirmRenewalMock,
+  useSendRenewalReminder: useSendRenewalReminderMock,
+  useRemoveFromCampaign: useRemoveFromCampaignMock,
+  useCheckRenewalReactions: useCheckRenewalReactionsMock,
+  useProcessDueRemovals: useProcessDueRemovalsMock,
   useNonResponders: useNonRespondersMock,
 }))
 
 const campaign: RenewalCampaignDetail = {
   id: 'campaign-1',
-  communityId: 'community-1',
+  groupId: 'group-1',
   startedAt: '2026-01-01T00:00:00Z',
   deadline: '2026-01-08T00:00:00Z',
   pendingCount: 1,
   confirmedCount: 0,
   expiredCount: 0,
   totalCount: 1,
+  archivedAt: null,
   confirmations: [
     {
       memberId: 'member-1',
@@ -39,6 +57,9 @@ const campaign: RenewalCampaignDetail = {
       status: 'pending',
       isExpired: false,
       respondedAt: null,
+      reminderSentAt: null,
+      declinedAt: null,
+      removedAt: null,
     },
   ],
 }
@@ -51,6 +72,10 @@ function setup(role: SessionUser['role']) {
   mockSession(role)
   useRenewalCampaignMock.mockReturnValue({ isPending: false, isError: false, data: campaign })
   useConfirmRenewalMock.mockReturnValue({ mutate: vi.fn(), isPending: false, variables: undefined })
+  useSendRenewalReminderMock.mockReturnValue({ mutate: vi.fn(), isPending: false, variables: undefined })
+  useRemoveFromCampaignMock.mockReturnValue({ mutate: vi.fn(), isPending: false, variables: undefined })
+  useCheckRenewalReactionsMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
+  useProcessDueRemovalsMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
   useNonRespondersMock.mockReturnValue({ isPending: false, isError: false, data: [] })
 }
 

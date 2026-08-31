@@ -49,4 +49,4 @@ export interface GroupJoinRequest {
   requestedAt: string
 }
 
-export type GroupDetailTab = 'overview' | 'members' | 'requests' | 'advanced'
+export type GroupDetailTab = 'overview' | 'members' | 'requests' | 'renewals' | 'advanced'

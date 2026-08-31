@@ -67,3 +67,7 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
   return apiFetch<T>(path, { method: 'PATCH', body })
 }
+
+export function apiDelete<T>(path: string): Promise<T> {
+  return apiFetch<T>(path, { method: 'DELETE' })
+}

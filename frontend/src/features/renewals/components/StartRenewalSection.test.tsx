@@ -30,7 +30,6 @@ const suggestion: RenewalSuggestion = {
   displayName: 'Alice',
   avatarUrl: null,
   phoneNumberMasked: '+49 *** ** 90',
-  groupCount: 2,
   joinedAt: '2025-01-01T00:00:00Z',
   lastMessageAt: null,
   lastSeenAt: null,
@@ -52,7 +51,7 @@ function renderSection(role: SessionUser['role']) {
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <StartRenewalSection communityId="community-1" onCampaignCreated={vi.fn()} />
+        <StartRenewalSection groupId="group-1" onCampaignCreated={vi.fn()} />
       </TooltipProvider>
     </QueryClientProvider>,
   )

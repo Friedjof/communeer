@@ -1,6 +1,7 @@
-import { AlertCircle } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,7 +17,7 @@ import type { RenewalSuggestion } from '../types'
 import { initials } from '@/lib/format'
 
 interface StartRenewalDialogProps {
-  communityId: string
+  groupId: string
   members: RenewalSuggestion[]
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -25,9 +26,9 @@ interface StartRenewalDialogProps {
 
 const DEFAULT_DEADLINE_DAYS = 7
 
-export function StartRenewalDialog({ communityId, members, open, onOpenChange, onCreated }: StartRenewalDialogProps) {
+export function StartRenewalDialog({ groupId, members, open, onOpenChange, onCreated }: StartRenewalDialogProps) {
   const [deadlineDays, setDeadlineDays] = useState(DEFAULT_DEADLINE_DAYS)
-  const createCampaign = useCreateRenewalCampaign(communityId)
+  const createCampaign = useCreateRenewalCampaign(groupId)
 
   function handleOpenChange(next: boolean) {
     if (!next) {
@@ -51,20 +52,27 @@ export function StartRenewalDialog({ communityId, members, open, onOpenChange, o
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Start a renewal round for {members.length} member{members.length === 1 ? '' : 's'}</DialogTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <DialogTitle>Start a renewal round for {members.length} member{members.length === 1 ? '' : 's'}</DialogTitle>
+            <Badge variant="secondary" className="gap-1">
+              <Sparkles className="size-3" />
+              Automated
+            </Badge>
+          </div>
           <DialogDescription>
-            This creates a tracking list only — review it before continuing.
+            This creates a tracking list and sends a reminder — review it before continuing.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
-          <AlertCircle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+        <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" />
           <p>
-            <strong>Nothing is sent automatically.</strong> You need to post the confirmation request yourself in
-            WhatsApp — Communeer does not send messages or detect reactions. Come back here afterwards and mark
-            people confirmed once you see their reply.
+            Communeer automatically sends each member a reminder (in German and English) explaining how to confirm.
+            If someone reacts <strong>❌</strong> to it, that's read automatically and counts as "no longer
+            interested" — they're immediately treated as expired, no need to wait for the deadline. Removing anyone
+            from WhatsApp still stays a manual step.
           </p>
         </div>
 

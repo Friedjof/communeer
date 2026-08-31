@@ -48,7 +48,6 @@ const CommunityMembersPage = lazyRouteComponent(
 )
 const ModerationPage = lazyRouteComponent(() => import('@/features/moderation/ModerationPage'), 'ModerationPage')
 const SettingsPage = lazyRouteComponent(() => import('@/features/settings/SettingsPage'), 'SettingsPage')
-const RenewalsPage = lazyRouteComponent(() => import('@/features/renewals/RenewalsPage'), 'RenewalsPage')
 const AuditLogPage = lazyRouteComponent(() => import('@/features/audit/AuditLogPage'), 'AuditLogPage')
 
 interface RouterContext {
@@ -180,52 +179,21 @@ const communityMembersRoute = createRoute({
   },
 })
 
-interface RenewalsSearch {
+interface GroupDetailSearch {
+  tab: GroupDetailTab
+  /** Only meaningful when `tab === 'renewals'` — which campaign is expanded
+   * in the Renewals tab's campaign list. */
   campaignId?: string
 }
 
-const communityRenewalsRoute = createRoute({
-  getParentRoute: () => communityLayoutRoute,
-  path: 'renewals',
-  validateSearch: (search: Record<string, unknown>): RenewalsSearch => ({
-    campaignId: typeof search.campaignId === 'string' ? search.campaignId : undefined,
-  }),
-  pendingComponent: RoutePendingFallback,
-  component: RenewalsRouteComponent,
-})
-
-function RenewalsRouteComponent() {
-  const { communityId } = communityLayoutRoute.useParams()
-  const { campaignId } = communityRenewalsRoute.useSearch()
-  const navigate = useNavigate()
-
-  return (
-    <RenewalsPage
-      communityId={communityId}
-      selectedCampaignId={campaignId ?? null}
-      onSelectCampaign={(nextCampaignId) =>
-        void navigate({
-          to: '/c/$communityId/renewals',
-          params: { communityId },
-          search: { campaignId: nextCampaignId ?? undefined },
-          replace: true,
-        })
-      }
-    />
-  )
-}
-
-interface GroupDetailSearch {
-  tab: GroupDetailTab
-}
-
-const VALID_TABS: GroupDetailTab[] = ['overview', 'members', 'requests', 'advanced']
+const VALID_TABS: GroupDetailTab[] = ['overview', 'members', 'requests', 'renewals', 'advanced']
 
 const groupDetailRoute = createRoute({
   getParentRoute: () => communityLayoutRoute,
   path: 'groups/$groupId',
   validateSearch: (search: Record<string, unknown>): GroupDetailSearch => ({
     tab: VALID_TABS.includes(search.tab as GroupDetailTab) ? (search.tab as GroupDetailTab) : 'overview',
+    campaignId: typeof search.campaignId === 'string' ? search.campaignId : undefined,
   }),
   pendingComponent: RoutePendingFallback,
   component: GroupDetailRouteComponent,
@@ -233,7 +201,7 @@ const groupDetailRoute = createRoute({
 
 function GroupDetailRouteComponent() {
   const { communityId, groupId } = groupDetailRoute.useParams()
-  const { tab } = groupDetailRoute.useSearch()
+  const { tab, campaignId } = groupDetailRoute.useSearch()
   const navigate = useNavigate()
 
   return (
@@ -245,6 +213,15 @@ function GroupDetailRouteComponent() {
           to: '/c/$communityId/groups/$groupId',
           params: { communityId, groupId },
           search: { tab: nextTab },
+          replace: true,
+        })
+      }
+      selectedCampaignId={campaignId ?? null}
+      onSelectCampaign={(nextCampaignId) =>
+        void navigate({
+          to: '/c/$communityId/groups/$groupId',
+          params: { communityId, groupId },
+          search: { tab: 'renewals', campaignId: nextCampaignId ?? undefined },
           replace: true,
         })
       }
@@ -307,7 +284,6 @@ const whatsappSetupRoute = createRoute({
 const communityRouteTree = communityLayoutRoute.addChildren([
   communityIndexRoute,
   communityMembersRoute,
-  communityRenewalsRoute,
   communityModerationRoute,
   groupDetailRoute,
   groupMembersDeepLinkRoute,

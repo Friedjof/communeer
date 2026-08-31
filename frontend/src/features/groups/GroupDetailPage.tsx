@@ -5,6 +5,7 @@ import { ListSkeleton } from '@/components/feedback/LoadingSkeletons'
 import { GroupAdvancedTab } from './components/GroupAdvancedTab'
 import { GroupMembersTab } from './components/GroupMembersTab'
 import { GroupOverviewTab } from './components/GroupOverviewTab'
+import { GroupRenewalsTab } from './components/GroupRenewalsTab'
 import { GroupRequestsTab } from './components/GroupRequestsTab'
 import { useGroup } from './queries'
 import type { GroupDetailTab } from './types'
@@ -13,9 +14,17 @@ interface GroupDetailPageProps {
   groupId: string
   tab: GroupDetailTab
   onTabChange: (tab: GroupDetailTab) => void
+  selectedCampaignId: string | null
+  onSelectCampaign: (campaignId: string | null) => void
 }
 
-export function GroupDetailPage({ groupId, tab, onTabChange }: GroupDetailPageProps) {
+export function GroupDetailPage({
+  groupId,
+  tab,
+  onTabChange,
+  selectedCampaignId,
+  onSelectCampaign,
+}: GroupDetailPageProps) {
   const group = useGroup(groupId)
 
   if (group.isPending) {
@@ -45,6 +54,7 @@ export function GroupDetailPage({ groupId, tab, onTabChange }: GroupDetailPagePr
               </Badge>
             ) : null}
           </TabsTrigger>
+          <TabsTrigger value="renewals">Renewals</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
@@ -55,6 +65,9 @@ export function GroupDetailPage({ groupId, tab, onTabChange }: GroupDetailPagePr
         </TabsContent>
         <TabsContent value="requests">
           <GroupRequestsTab groupId={groupId} />
+        </TabsContent>
+        <TabsContent value="renewals">
+          <GroupRenewalsTab groupId={groupId} selectedCampaignId={selectedCampaignId} onSelectCampaign={onSelectCampaign} />
         </TabsContent>
         <TabsContent value="advanced">
           <GroupAdvancedTab groupId={groupId} />
