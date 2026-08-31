@@ -1,3 +1,7 @@
+// oxlint-disable react/only-export-components -- this file's job is the
+// router config (`export const router`), not component authoring; each
+// route's tiny layout component is deliberately kept inline next to its
+// `createRoute` call for readability, so Fast Refresh doesn't apply here.
 import type { QueryClient } from '@tanstack/react-query'
 import {
   Outlet,
@@ -8,6 +12,7 @@ import {
   redirect,
   useNavigate,
   useParams,
+  useRouterState,
 } from '@tanstack/react-router'
 import { ApiError } from '@/api/client'
 import { AppShell } from '@/components/layout/AppShell'
@@ -18,7 +23,6 @@ import { sessionQueryOptions } from '@/features/auth/queries'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { communitiesQueryOptions } from '@/features/communities/queries'
 import type { GroupDetailTab } from '@/features/groups/types'
-import { SettingsPage } from '@/features/settings/SettingsPage'
 import { WhatsAppSetupPage } from '@/features/whatsapp/WhatsAppSetupPage'
 import { whatsappStatusQueryOptions } from '@/features/whatsapp/queries'
 import { useUiStore } from '@/lib/uiStore'
@@ -30,9 +34,9 @@ import { queryClient } from './queryClient'
 // import promise, which each route's own `pendingComponent`-driven Suspense
 // boundary (see `Match`/`MatchView` in tanstack/react-router) catches —
 // so a route transition shows `RoutePendingFallback` instead of a blank gap
-// while the chunk downloads. `LoginPage`/`SettingsPage`/`WhatsAppSetupPage`
-// and the shell/auth-guard routes stay eagerly imported above — they're
-// needed immediately (or are small) and don't need splitting.
+// while the chunk downloads. `LoginPage`/`WhatsAppSetupPage` and the
+// shell/auth-guard routes stay eagerly imported above — they're needed
+// immediately (or are small) and don't need splitting.
 const CommunityOverviewPage = lazyRouteComponent(
   () => import('@/features/communities/CommunityOverviewPage'),
   'CommunityOverviewPage',
@@ -43,6 +47,7 @@ const CommunityMembersPage = lazyRouteComponent(
   'CommunityMembersPage',
 )
 const ModerationPage = lazyRouteComponent(() => import('@/features/moderation/ModerationPage'), 'ModerationPage')
+const SettingsPage = lazyRouteComponent(() => import('@/features/settings/SettingsPage'), 'SettingsPage')
 const RenewalsPage = lazyRouteComponent(() => import('@/features/renewals/RenewalsPage'), 'RenewalsPage')
 const AuditLogPage = lazyRouteComponent(() => import('@/features/audit/AuditLogPage'), 'AuditLogPage')
 
@@ -89,12 +94,23 @@ const authenticatedRoute = createRoute({
   component: AuthenticatedLayout,
 })
 
+/** Coarse top-level section key (`/c`, `/audit`, `/settings`, `/setup`, …) —
+ * deliberately not the full pathname, so switching communities or tabs
+ * within `/c/*` doesn't force-remount `AppShell`'s children; it only fades
+ * in when moving between fundamentally different sections of the app. */
+function topLevelSectionKey(pathname: string): string {
+  return pathname.split('/')[1] ?? ''
+}
+
 function AuthenticatedLayout() {
   const { communityId } = useParams({ strict: false })
   const persistedCommunityId = useUiStore((state) => state.selectedCommunityId)
+  const sectionKey = useRouterState({ select: (state) => topLevelSectionKey(state.location.pathname) })
   return (
     <AppShell communityId={communityId ?? persistedCommunityId ?? undefined}>
-      <Outlet />
+      <div key={sectionKey} className="animate-in fade-in duration-200">
+        <Outlet />
+      </div>
     </AppShell>
   )
 }
@@ -130,9 +146,16 @@ const communityLayoutRoute = createRoute({
 function CommunityLayoutComponent() {
   const { communityId } = communityLayoutRoute.useParams()
   const { groupId } = useParams({ strict: false })
+  // Full pathname (community + sub-page + group id) so switching communities,
+  // switching between overview/members/renewals/moderation, or opening a
+  // different group all get a subtle fade rather than an instant swap —
+  // while `CommunityShell` itself (the sidebar/nav chrome) stays mounted.
+  const routeKey = useRouterState({ select: (state) => state.location.pathname })
   return (
     <CommunityShell communityId={communityId} currentGroupId={groupId}>
-      <Outlet />
+      <div key={routeKey} className="animate-in fade-in duration-200">
+        <Outlet />
+      </div>
     </CommunityShell>
   )
 }
@@ -267,6 +290,7 @@ const auditRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/settings',
+  pendingComponent: RoutePendingFallback,
   component: () => (
     <div className="p-4 md:p-6">
       <SettingsPage />

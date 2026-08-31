@@ -49,7 +49,7 @@ export function GroupMembersTab({ groupId }: GroupMembersTabProps) {
     <>
       <MemberTable<GroupMemberRow>
         data={activeMembers}
-        columns={groupMemberColumns}
+        columns={groupMemberColumns(groupId)}
         onRowClick={(row) => setSelectedMemberId(row.memberId)}
         emptyMessage="No members in this group yet."
         exportFileName={exportFileName}

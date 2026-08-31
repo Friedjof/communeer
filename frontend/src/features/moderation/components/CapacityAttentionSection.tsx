@@ -3,7 +3,8 @@ import { AlertTriangle, CheckCircle2, UserPlus } from 'lucide-react'
 import { CAPACITY_ATTENTION_THRESHOLD } from '@/components/data/CapacityBar'
 import { useDismissModerationItem } from '../queries'
 import type { CapacityAttention } from '../types'
-import { isModerationItemDismissing, MODERATION_ROW_TRIGGER_CLASS, ModerationRow } from './ModerationRow'
+import { isModerationItemDismissing, MODERATION_ROW_TRIGGER_CLASS } from './moderationRowHelpers'
+import { ModerationRow } from './ModerationRow'
 import { ModerationSectionCard } from './ModerationSectionCard'
 
 interface CapacityAttentionSectionProps {
@@ -26,9 +27,10 @@ export function CapacityAttentionSection({ communityId, groups }: CapacityAttent
         </div>
       ) : (
         <ul className="flex flex-col gap-2">
-          {groups.map((group) => (
+          {groups.map((group, index) => (
             <ModerationRow
               key={group.groupId}
+              index={index}
               isDismissing={isModerationItemDismissing(dismiss, group.groupId)}
               onDismiss={() => dismiss.mutate({ section: 'capacity_attention', targetId: group.groupId })}
             >

@@ -4,7 +4,8 @@ import { EmptyState } from '@/components/feedback/EmptyState'
 import { formatPercent } from '@/lib/format'
 import { useDismissModerationItem } from '../queries'
 import type { JoinBurst } from '../types'
-import { isModerationItemDismissing, MODERATION_ROW_TRIGGER_CLASS, ModerationRow } from './ModerationRow'
+import { isModerationItemDismissing, MODERATION_ROW_TRIGGER_CLASS } from './moderationRowHelpers'
+import { ModerationRow } from './ModerationRow'
 import { ModerationSectionCard } from './ModerationSectionCard'
 
 interface JoinBurstsSectionProps {
@@ -28,9 +29,10 @@ export function JoinBurstsSection({ communityId, bursts }: JoinBurstsSectionProp
         />
       ) : (
         <ul className="flex flex-col gap-2">
-          {bursts.map((burst) => (
+          {bursts.map((burst, index) => (
             <ModerationRow
               key={burst.groupId}
+              index={index}
               isDismissing={isModerationItemDismissing(dismiss, burst.groupId)}
               onDismiss={() => dismiss.mutate({ section: 'join_bursts', targetId: burst.groupId })}
             >

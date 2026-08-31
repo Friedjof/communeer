@@ -1,4 +1,4 @@
-import { queryOptions, useQuery } from '@tanstack/react-query'
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as groupsApi from './api'
 
 // Reads Communeer's own local DB only (never WhatsApp/WPPConnect directly) —
@@ -55,5 +55,57 @@ export function useGroupInviteLink(groupId: string) {
     enabled: false,
     staleTime: 60_000,
     retry: false,
+  })
+}
+
+/** Shared invalidation after any membership-mutating action (approve/reject/
+ * remove/promote/demote): the requests list, member list, and pending/admin
+ * counts embedded in the group detail can all change together. */
+function useInvalidateGroupMembership(groupId: string) {
+  const queryClient = useQueryClient()
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: groupKeys.requests(groupId) })
+    void queryClient.invalidateQueries({ queryKey: groupKeys.members(groupId) })
+    void queryClient.invalidateQueries({ queryKey: ['groups', groupId], exact: false })
+  }
+}
+
+export function useApproveJoinRequest(groupId: string) {
+  const invalidate = useInvalidateGroupMembership(groupId)
+  return useMutation({
+    mutationFn: (memberId: string) => groupsApi.approveJoinRequest(groupId, memberId),
+    onSuccess: invalidate,
+  })
+}
+
+export function useRejectJoinRequest(groupId: string) {
+  const invalidate = useInvalidateGroupMembership(groupId)
+  return useMutation({
+    mutationFn: (memberId: string) => groupsApi.rejectJoinRequest(groupId, memberId),
+    onSuccess: invalidate,
+  })
+}
+
+export function useRemoveGroupMember(groupId: string) {
+  const invalidate = useInvalidateGroupMembership(groupId)
+  return useMutation({
+    mutationFn: (memberId: string) => groupsApi.removeGroupMember(groupId, memberId),
+    onSuccess: invalidate,
+  })
+}
+
+export function usePromoteGroupMember(groupId: string) {
+  const invalidate = useInvalidateGroupMembership(groupId)
+  return useMutation({
+    mutationFn: (memberId: string) => groupsApi.promoteGroupMember(groupId, memberId),
+    onSuccess: invalidate,
+  })
+}
+
+export function useDemoteGroupMember(groupId: string) {
+  const invalidate = useInvalidateGroupMembership(groupId)
+  return useMutation({
+    mutationFn: (memberId: string) => groupsApi.demoteGroupMember(groupId, memberId),
+    onSuccess: invalidate,
   })
 }

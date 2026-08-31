@@ -3,7 +3,8 @@ import { ShieldAlert } from 'lucide-react'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { useDismissModerationItem } from '../queries'
 import type { AdminCoverageGap } from '../types'
-import { isModerationItemDismissing, MODERATION_ROW_TRIGGER_CLASS, ModerationRow } from './ModerationRow'
+import { isModerationItemDismissing, MODERATION_ROW_TRIGGER_CLASS } from './moderationRowHelpers'
+import { ModerationRow } from './ModerationRow'
 import { ModerationSectionCard } from './ModerationSectionCard'
 
 interface AdminCoverageGapsSectionProps {
@@ -27,9 +28,10 @@ export function AdminCoverageGapsSection({ communityId, gaps }: AdminCoverageGap
         />
       ) : (
         <ul className="flex flex-col gap-2">
-          {gaps.map((gap) => (
+          {gaps.map((gap, index) => (
             <ModerationRow
               key={gap.groupId}
+              index={index}
               isDismissing={isModerationItemDismissing(dismiss, gap.groupId)}
               onDismiss={() => dismiss.mutate({ section: 'admin_coverage_gaps', targetId: gap.groupId })}
             >

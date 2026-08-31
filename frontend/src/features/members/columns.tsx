@@ -2,27 +2,13 @@ import { legacyCreateColumnHelper as createColumnHelper } from '@tanstack/react-
 import { ShieldCheck } from 'lucide-react'
 import { ActivityBar } from '@/components/data/ActivityBar'
 import { ActivityColumnHeader } from '@/components/data/MessageActivityCell'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { formatDate, initials } from '@/lib/format'
+import { formatDate } from '@/lib/format'
 import type { GroupMemberRow } from '../groups/types'
+import { GroupMemberRowActions } from './components/GroupMemberRowActions'
+import { IdentityCell } from './components/IdentityCell'
 import { MaskedPhone } from './components/MaskedPhone'
 import type { CommunityMemberRow } from './types'
-
-function IdentityCell({ avatarUrl, displayName, waId }: { avatarUrl: string | null; displayName: string; waId: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <Avatar className="size-8">
-        {avatarUrl ? <AvatarImage src={avatarUrl} alt="" /> : null}
-        <AvatarFallback className="text-xs">{initials(displayName)}</AvatarFallback>
-      </Avatar>
-      <div className="flex flex-col">
-        <span className="font-medium leading-tight">{displayName}</span>
-        <span className="text-xs text-muted-foreground leading-tight">{waId}</span>
-      </div>
-    </div>
-  )
-}
 
 const communityColumnHelper = createColumnHelper<CommunityMemberRow>()
 
@@ -78,8 +64,12 @@ export const communityMemberColumns = [
 
 const groupColumnHelper = createColumnHelper<GroupMemberRow>()
 
-export const groupMemberColumns = [
-  groupColumnHelper.accessor('displayName', {
+/** A factory (not a plain array, unlike `communityMemberColumns`) because
+ * the trailing actions column needs to know which group to scope its
+ * promote/demote/remove mutations to. */
+export function groupMemberColumns(groupId: string) {
+  return [
+    groupColumnHelper.accessor('displayName', {
     header: 'Member',
     cell: (info) => (
       <IdentityCell avatarUrl={info.row.original.avatarUrl} displayName={info.getValue()} waId={info.row.original.waId} />
@@ -119,4 +109,10 @@ export const groupMemberColumns = [
       return <span className="text-muted-foreground">Member</span>
     },
   }),
-]
+    groupColumnHelper.display({
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      cell: (info) => <GroupMemberRowActions groupId={groupId} member={info.row.original} />,
+    }),
+  ]
+}
