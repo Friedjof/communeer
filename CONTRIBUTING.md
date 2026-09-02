@@ -32,6 +32,28 @@ pnpm test
 
 All four should pass locally before you open a PR.
 
+## Commit messages
+
+Format: `type(scope): summary` — one line, 100 characters max, no trailing
+period.
+
+- `type` is one of: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`.
+- `scope` is the affected area — a backend module (`auth`, `renewals`,
+  `users`, `authz`, `webhooks`, ...) or a frontend feature
+  (`frontend/users`, `frontend/renewals`, ...), whichever the change
+  actually touches.
+- `summary` is imperative, lowercase after the colon (e.g. `add`, not
+  `added`/`adds`).
+
+Examples: `feat(renewals): send bilingual reminder on campaign start`,
+`fix(auth): remove account-enumeration oracle in claim lockout`,
+`chore(deps): update in-range frontend and backend dependencies`.
+
+Keep messages short — the subject line alone is enough for almost every
+commit. Add a body only when the summary genuinely can't carry the "why"
+(a non-obvious fix, a deliberate trade-off), and keep it to a few lines.
+Never add `Co-Authored-By:` or other author/attribution trailers.
+
 ## Opening a pull request
 
 Use the PR template (`.github/PULL_REQUEST_TEMPLATE.md`) — it asks for
