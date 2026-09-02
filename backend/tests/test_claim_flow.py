@@ -355,13 +355,15 @@ def test_complete_claim_locks_out_after_max_failed_attempts(db_session):
     db_session.refresh(user)
     assert user.locked_until is not None
 
-    # Locked out now — even the *correct* code is rejected, with 429 (not
-    # 400), before the code is ever checked.
+    # Locked out now — even the *correct* code is rejected, before it's ever
+    # checked, with the same generic 400 as a wrong code (not a
+    # distinguishable 429) so lockout status can't be used as an
+    # account-enumeration oracle.
     with pytest.raises(ApiError) as exc_info:
         complete_claim(
             db_session, settings, phone_number=phone, code=correct_code, username=None, password=CLAIM_PASSWORD
         )
-    assert exc_info.value.status_code == 429
+    assert exc_info.value.status_code == 400
 
     db_session.refresh(user)
     assert user.is_claimed is False
@@ -407,3 +409,48 @@ def test_complete_claim_gives_identical_errors_for_unknown_wrong_code_and_alread
     )
 
     assert unknown_phone_message == wrong_code_message == already_claimed_message == "Invalid or expired code."
+
+
+def test_complete_claim_gives_identical_error_when_locked_out(db_session):
+    """A locked-out account must not be distinguishable from an
+    unknown/wrong-code one via status code or message — otherwise lockout
+    becomes an account-enumeration oracle for real, approved, unclaimed
+    phone numbers (the exact thing `request_claim` above is designed to
+    avoid)."""
+    provider = MockWhatsAppProvider()
+    _sync_unity(db_session, provider)
+    general = _get_group(db_session, "General")
+    member, user = _get_unclaimed_admin(db_session, general)
+    _approve(db_session, user)
+    phone = _phone_for(member)
+    settings = get_settings()
+
+    request_claim(db_session, provider, phone)
+    correct_code = _last_sent_code(provider, member.wa_id)
+
+    unknown_phone_message = _expect_bad_request(
+        lambda: complete_claim(
+            db_session, settings, phone_number="+49 000 00000000", code="000000",
+            username=None, password=CLAIM_PASSWORD,
+        )
+    )
+
+    for _ in range(settings.login_max_failed_attempts):
+        _expect_bad_request(
+            lambda: complete_claim(
+                db_session, settings, phone_number=phone, code="000000", username=None, password=CLAIM_PASSWORD
+            )
+        )
+
+    db_session.refresh(user)
+    assert user.locked_until is not None
+
+    locked_out_message = _expect_bad_request(
+        lambda: complete_claim(
+            db_session, settings, phone_number=phone, code=correct_code, username=None, password=CLAIM_PASSWORD
+        )
+    )
+
+    assert locked_out_message == unknown_phone_message == "Invalid or expired code."
+    db_session.refresh(user)
+    assert user.is_claimed is False

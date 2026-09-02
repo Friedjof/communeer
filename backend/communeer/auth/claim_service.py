@@ -26,7 +26,6 @@ from communeer.auth.phone import normalize_phone_to_wa_id
 from communeer.auth.provisioning import send_claim_code
 from communeer.auth.security import hash_password, is_locked_out
 from communeer.auth.service import (
-    _check_not_locked_out,
     _record_failure,
     _record_success,
     _verify_pending_otp_code,
@@ -87,7 +86,13 @@ def complete_claim(
     if user is None:
         raise bad_request("Invalid or expired code.")
 
-    _check_not_locked_out(user)
+    # Deliberately the same generic error as "no such claimable user" and
+    # "wrong code" below — unlike the login flow's lockout check, this must
+    # not leak via a distinguishable status code (429 vs 400) that a phone
+    # number belongs to a real, approved, unclaimed account. See
+    # `request_claim`'s no-oracle reasoning above.
+    if is_locked_out(user.locked_until, now=datetime.now(UTC)):
+        raise bad_request("Invalid or expired code.")
 
     if not _verify_pending_otp_code(db, user, code):
         _record_failure(db, user, settings)
