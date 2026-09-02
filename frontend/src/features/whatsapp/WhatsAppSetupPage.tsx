@@ -1,6 +1,6 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { Loader2, MessageCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, MessageCircle } from 'lucide-react'
 import { useState } from 'react'
 import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { communityKeys } from '@/features/communities/queries'
 import { useSession } from '@/features/auth/queries'
 import { useConnectWhatsApp, useDiscoverAndSync, useWhatsAppStatus, whatsappKeys } from './queries'
-import type { WhatsAppConnectionState } from './types'
+import type { DiscoverAndSyncResult, WhatsAppConnectionState } from './types'
 
 export function WhatsAppSetupPage() {
   const navigate = useNavigate()
@@ -40,24 +40,25 @@ export function WhatsAppSetupPage() {
     }
   }
 
+  // Holds the last `discover-and-sync` result so it can actually be shown
+  // (counts, hidden-non-admin communities, per-community failures) instead
+  // of navigating away the instant the request succeeds — see
+  // `DiscoverResultBody` below. `null` means "nothing to show yet".
+  const [discoverResult, setDiscoverResult] = useState<DiscoverAndSyncResult | null>(null)
+
   // Mirrors the `awaitingProgress`/`lastObservedState` pattern above, for the
   // server-reported discovery flag: this covers a page that reloaded while
   // `POST /whatsapp/discover-and-sync` was still running server-side (see
   // `whatsapp_status/router.py`) — this page instance never itself started
-  // that mutation, so `discoverAndSync.isPending`/its own `onSuccess` can't
-  // fire the navigate. Observing the polled flag flip from `true` to `false`
-  // is the only way this instance finds out discovery just finished.
+  // that mutation, so it never gets a `discoverResult` to show. Falling
+  // back to navigating straight to `/` is the best this instance can do;
+  // skipped whenever `discoverResult` is already set, so it can't yank the
+  // results screen away out from under someone who's reading it.
   const discoveryInProgress = status.data?.discoveryInProgress ?? false
   const [lastDiscoveryInProgress, setLastDiscoveryInProgress] = useState(discoveryInProgress)
   if (discoveryInProgress !== lastDiscoveryInProgress) {
     setLastDiscoveryInProgress(discoveryInProgress)
-    if (lastDiscoveryInProgress && !discoveryInProgress) {
-      // This instance never called `useDiscoverAndSync` itself, so its
-      // `onSuccess` (which invalidates `communityKeys.all`) never ran —
-      // without this, `indexRoute`'s `beforeLoad` could serve a cached,
-      // pre-discovery (possibly empty) communities list for up to
-      // `staleTime`, landing back on "No communities yet" right after
-      // discovery actually found some.
+    if (lastDiscoveryInProgress && !discoveryInProgress && discoverResult === null) {
       void queryClient.invalidateQueries({ queryKey: communityKeys.all })
       void queryClient.invalidateQueries({ queryKey: whatsappKeys.status })
       void navigate({ to: '/' })
@@ -82,9 +83,7 @@ export function WhatsAppSetupPage() {
 
   function handleDiscover() {
     discoverAndSync.mutate(undefined, {
-      onSuccess: () => {
-        void navigate({ to: '/' })
-      },
+      onSuccess: (result) => setDiscoverResult(result),
     })
   }
 
@@ -106,7 +105,21 @@ export function WhatsAppSetupPage() {
             </div>
           ) : null}
 
-          {!status.isPending && status.data ? (
+          {!status.isPending && status.data && discoverResult ? (
+            <DiscoverResultBody
+              result={discoverResult}
+              onDiscoverAgain={() => {
+                setDiscoverResult(null)
+                handleDiscover()
+              }}
+              onContinue={() => {
+                void navigate({ to: '/' })
+              }}
+              discoverPending={discoverAndSync.isPending}
+            />
+          ) : null}
+
+          {!status.isPending && status.data && !discoverResult ? (
             <StatusBody
               state={status.data.state}
               detail={status.data.detail}
@@ -233,6 +246,86 @@ function StatusBody({
       {isViewer ? (
         <p className="text-center text-sm text-muted-foreground">Your role doesn't have access to this.</p>
       ) : null}
+    </div>
+  )
+}
+
+interface DiscoverResultBodyProps {
+  result: DiscoverAndSyncResult
+  onDiscoverAgain: () => void
+  onContinue: () => void
+  discoverPending: boolean
+}
+
+/** Shown right after `discover-and-sync` finishes, replacing what used to
+ * be an immediate, silent navigate to `/` — the whole point is that a
+ * newly-synced community never just vanishes without explanation: this is
+ * the one place that says, honestly, what was found, what's hidden (and
+ * why), and what failed (and why). */
+function DiscoverResultBody({ result, onDiscoverAgain, onContinue, discoverPending }: DiscoverResultBodyProps) {
+  const hidden = result.communities.filter((c) => result.hiddenNonAdminWaIds.includes(c.waId))
+  const visibleCount = result.communities.length - hidden.length
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-start gap-2 text-sm">
+        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-primary" />
+        <p>
+          Found <strong>{result.communities.length}</strong> {result.communities.length === 1 ? 'community' : 'communities'}
+          {result.communities.length > 0 ? (
+            <>
+              {' '}— <strong>{visibleCount}</strong> will show up on your dashboard.
+            </>
+          ) : (
+            '.'
+          )}
+        </p>
+      </div>
+
+      {hidden.length > 0 ? (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div>
+            <p>
+              {hidden.length} {hidden.length === 1 ? 'community is' : 'communities are'} hidden because this
+              WhatsApp number isn't an admin there:
+            </p>
+            <ul className="mt-1 list-inside list-disc">
+              {hidden.map((c) => (
+                <li key={c.waId}>{c.name}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+
+      {result.failed.length > 0 ? (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div>
+            <p>{result.failed.length} {result.failed.length === 1 ? 'community' : 'communities'} failed to sync:</p>
+            <ul className="mt-1 list-inside list-disc">
+              {result.failed.map((f) => (
+                <li key={f.waId}>
+                  {f.name} — {f.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-2">
+        <Button className="w-full" onClick={onContinue}>
+          Continue to dashboard
+        </Button>
+        {result.failed.length > 0 ? (
+          <Button variant="outline" className="w-full gap-2" onClick={onDiscoverAgain} disabled={discoverPending}>
+            {discoverPending ? <Loader2 className="size-4 animate-spin" /> : null}
+            {discoverPending ? 'Discovering…' : 'Try again for the failed ones'}
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }

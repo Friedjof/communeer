@@ -13,11 +13,21 @@ import pytest
 import respx
 
 from communeer.config import Settings
+from communeer.providers.whatsapp import wppconnect as wppconnect_module
 from communeer.providers.whatsapp.base import (
     WhatsAppNotConnectedError,
     WhatsAppProviderUnavailableError,
 )
 from communeer.providers.whatsapp.wppconnect import WppconnectProvider
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff_delay(monkeypatch):
+    """`_request_with_retry`'s backoff sleeps real seconds between attempts
+    — every test in this file hitting a transient-error path (retried or
+    not) would otherwise actually wait for it. Patched to a no-op here so
+    only the retry *behavior* is under test, never wall-clock time."""
+    monkeypatch.setattr(wppconnect_module.time, "sleep", lambda _seconds: None)
 
 BASE_URL = "http://wppconnect-test:21465"
 SESSION = "testsession"
@@ -446,7 +456,7 @@ def test_get_admin_community_wa_ids_filters_by_isme_flag_in_group_admins():
     other_root_wa_id = "120363200000000001@g.us"
     other_announce_wa_id = "120363200000000010@g.us"
 
-    own_lid = "236794549432473@lid"
+    own_lid = "111111111111111@lid"
     other_admin_lid = "999999999999999@lid"
 
     chats = [
@@ -567,7 +577,7 @@ def test_get_admin_community_wa_ids_includes_community_with_no_detected_announce
     _mock_token_and_connected(respx.mock)
 
     root_wa_id = "120363400000000001@g.us"
-    own_lid = "236794549432473@lid"
+    own_lid = "111111111111111@lid"
 
     chats = [
         {
@@ -601,7 +611,7 @@ def test_get_admin_community_wa_ids_includes_community_when_group_admins_call_fa
 
     root_wa_id = "120363500000000001@g.us"
     announce_wa_id = "120363500000000010@g.us"
-    own_lid = "236794549432473@lid"
+    own_lid = "111111111111111@lid"
 
     chats = [
         {
@@ -646,6 +656,55 @@ def test_get_admin_community_wa_ids_returns_none_when_not_connected():
 
     assert provider.get_own_wa_id() is None
     assert provider.get_admin_community_wa_ids() is None
+
+
+@respx.mock
+def test_authed_request_retries_transient_timeout_and_succeeds():
+    """A community with many groups fans out to many WPPConnect calls
+    (`_build_memberships`) — one of them hitting a transient timeout used to
+    take down the *entire* community's sync. Two timeouts followed by a real
+    response must now succeed rather than propagate."""
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.get(_status_session_url()).mock(
+        side_effect=[
+            httpx.TimeoutException("timed out"),
+            httpx.TimeoutException("timed out"),
+            httpx.Response(200, json={"status": "CONNECTED"}),
+        ]
+    )
+
+    provider = _provider()
+    status = provider.get_connection_status()
+
+    assert status.state.value == "connected"
+
+
+@respx.mock
+def test_authed_request_gives_up_after_max_transient_retries():
+    """More consecutive transient failures than the retry budget allows
+    must still surface as a failure — retrying is a resilience improvement,
+    not a way to hide a genuinely down WPPConnect server forever."""
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    respx.mock.get(_status_session_url()).mock(side_effect=httpx.TimeoutException("timed out"))
+
+    provider = _provider()
+    status = provider.get_connection_status()
+
+    assert status.state.value == "error"
+
+
+@respx.mock
+def test_authed_request_does_not_retry_a_real_http_error_status():
+    """A real HTTP error response (as opposed to a transport-level
+    exception) must not be retried — retrying is only for genuinely
+    transient timeout/connect failures, never a server's actual answer."""
+    respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
+    route = respx.mock.get(_status_session_url()).respond(500)
+
+    provider = _provider()
+    provider.get_connection_status()
+
+    assert route.call_count == 1
 
 
 @respx.mock

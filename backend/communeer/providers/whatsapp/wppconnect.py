@@ -37,9 +37,9 @@ communities", which would be indistinguishable from a real empty account).
 `get_admin_community_wa_ids` below): the connected account's own identity,
 in the namespace `group-admins` uses to list a group's admins, is **not**
 what `status-session`/`host-device`/`get-phone-number` report (those give
-the real phone-number JID, e.g. `491701234567@c.us`). Confirmed live:
+the real phone-number JID, e.g. `4915500000000@c.us`). Confirmed live:
 modern WhatsApp accounts are addressed within group rosters via an opaque
-`@lid` id instead (e.g. `236794549432473@lid`), and the two never match by
+`@lid` id instead (e.g. `111111111111111@lid`), and the two never match by
 naive string comparison — tested against an account that IS a real admin
 of one community, `host-device`'s id was absent from every
 `group-admins` result, including that one. The field that actually
@@ -50,6 +50,7 @@ happens to use — see `_find_own_wa_id` below.
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -90,6 +91,20 @@ _STATUS_CONNECTED = {"CONNECTED"}
 # settings, so hardcoding them is legitimate — unlike guessing `size` was.
 _REGULAR_GROUP_MEMBER_LIMIT = 1024
 _ANNOUNCEMENT_GROUP_MEMBER_LIMIT = 2000
+
+# A large community's `_build_memberships()` fans out to 3 WPPConnect calls
+# per group (group-members, group-admins, get-messages) — one slow response
+# among dozens, against real WhatsApp Web automation, used to silently take
+# down that community's *entire* sync (`discover_and_sync`'s per-community
+# catch-all treats a single `httpx.TimeoutException` the same as any other
+# unrecoverable failure). Retrying a couple of times with backoff on
+# genuinely transient transport errors (timeout/connect failure only — never
+# a real HTTP error status, which isn't one of these exception types) turns
+# a one-off slow call into a brief delay instead of losing the whole
+# community for that discovery run.
+_TRANSIENT_TRANSPORT_ERRORS = (httpx.TimeoutException, httpx.ConnectError)
+_MAX_TRANSIENT_RETRIES = 2
+_RETRY_BACKOFF_SECONDS = 1.0
 
 
 class _LastMessage(NamedTuple):
@@ -241,13 +256,30 @@ class WppconnectProvider(WhatsAppProvider):
         self._token = str(token)
         return self._token
 
+    def _request_with_retry(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """`self._client.request`, retrying up to `_MAX_TRANSIENT_RETRIES`
+        times (with a linear backoff) on a genuinely transient transport
+        failure — see the module-level constants' comment. Never retries a
+        real HTTP error status (that's not one of these exception types at
+        all, `raise_for_status()` is always the caller's job) or any other
+        exception, so this can't mask a real bug as a timeout."""
+        attempt = 0
+        while True:
+            try:
+                return self._client.request(method, path, **kwargs)
+            except _TRANSIENT_TRANSPORT_ERRORS:
+                attempt += 1
+                if attempt > _MAX_TRANSIENT_RETRIES:
+                    raise
+                time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+
     def _authed_request(self, method: str, path: str, **kwargs) -> httpx.Response:
         if self._token is None:
             self._ensure_token()
 
         headers = kwargs.pop("headers", {}) or {}
         headers["Authorization"] = f"Bearer {self._token}"
-        resp = self._client.request(method, path, headers=headers, **kwargs)
+        resp = self._request_with_retry(method, path, headers=headers, **kwargs)
 
         if resp.status_code == 401:
             # Token may have expired server-side — regenerate exactly once
@@ -256,7 +288,7 @@ class WppconnectProvider(WhatsAppProvider):
             self._token = None
             self._ensure_token()
             headers["Authorization"] = f"Bearer {self._token}"
-            resp = self._client.request(method, path, headers=headers, **kwargs)
+            resp = self._request_with_retry(method, path, headers=headers, **kwargs)
 
         return resp
 
@@ -653,10 +685,10 @@ class WppconnectProvider(WhatsAppProvider):
     # Empirically verified against a live, authenticated session (see the
     # plan this was built from): `status-session`, `host-device`, and
     # `get-phone-number` all report the connected account's real
-    # phone-number JID (e.g. `491701234567@c.us`) — but `group-members` /
+    # phone-number JID (e.g. `4915500000000@c.us`) — but `group-members` /
     # `group-admins` address every participant, *including the connected
     # account itself*, via WhatsApp's newer opaque `@lid` identifier
-    # instead (e.g. `236794549432473@lid`). These are two different ids for
+    # instead (e.g. `111111111111111@lid`). These are two different ids for
     # the same account, in two different namespaces. Comparing the
     # `@c.us` id from `host-device` against a `group-admins` result
     # silently never matches — confirmed live: it returned `False` even

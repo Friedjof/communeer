@@ -35,10 +35,42 @@ def test_discover_and_sync_returns_synced_summaries_for_mock_provider(client):
 
     assert response.status_code == 200
     body = response.json()
-    names = {c["name"] for c in body}
+    communities = body["communities"]
+    names = {c["name"] for c in communities}
     assert {"Unity Alpha", "Riverside Collective"} <= names
-    for community in body:
+    for community in communities:
         assert "waId" in community and "memberCount" in community
+    # `MockWhatsAppProvider.get_admin_community_wa_ids()` always returns
+    # `None` (no "connected account" concept) — nothing is ever hidden or
+    # reported as failed in mock mode.
+    assert body["hiddenNonAdminWaIds"] == []
+    assert body["failed"] == []
+
+
+def test_discover_and_sync_reports_hidden_non_admin_communities(client, monkeypatch):
+    """A community that synced successfully but where the connected
+    WhatsApp number isn't an admin must still be listed in `communities`
+    (unfiltered — `GET /communities` is what actually hides it) but flagged
+    in `hiddenNonAdminWaIds`, so the Setup page can say so honestly instead
+    of it just silently never showing up anywhere (see `discover_and_sync`'s
+    comment on this)."""
+    from communeer.providers.whatsapp.mock import MockWhatsAppProvider
+
+    _login(client)
+
+    unity_wa_id = "120363010000000001@g.us"
+    riverside_wa_id = "120363020000000001@g.us"
+    monkeypatch.setattr(
+        MockWhatsAppProvider, "get_admin_community_wa_ids", lambda self: {unity_wa_id}
+    )
+
+    response = client.post("/api/v1/whatsapp/discover-and-sync")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hiddenNonAdminWaIds"] == [riverside_wa_id]
+    synced_wa_ids = {c["waId"] for c in body["communities"]}
+    assert {unity_wa_id, riverside_wa_id} <= synced_wa_ids
 
 
 def test_discover_and_sync_returns_503_when_provider_is_unavailable(client, monkeypatch):
@@ -88,9 +120,17 @@ def test_discover_and_sync_continues_past_one_communitys_failure(client, monkeyp
 
     assert response.status_code == 200
     body = response.json()
-    names = {c["name"] for c in body}
+    communities = body["communities"]
+    names = {c["name"] for c in communities}
     assert "Riverside Collective" in names
     assert "Unity Alpha" not in names
+
+    # The failed community is reported, with a safe generic reason —
+    # never the raw exception text (see `_discovery_failure_reason`).
+    assert len(body["failed"]) == 1
+    assert body["failed"][0]["waId"] == unity_wa_id
+    assert body["failed"][0]["name"] == "Unity Alpha"
+    assert "boom" not in body["failed"][0]["reason"]
 
     # The failed community's provisioning reconciliation etc. never even ran
     # (its sync raised before committing), but the flag must still reset

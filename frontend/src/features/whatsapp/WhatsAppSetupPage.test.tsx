@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionUser } from '@/features/auth/types'
 import { WhatsAppSetupPage } from './WhatsAppSetupPage'
@@ -133,5 +134,44 @@ describe('WhatsAppSetupPage', () => {
     await waitFor(() => {
       expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['communities'] })
     })
+  })
+
+  it('shows what was found instead of navigating away immediately, and only continues on click', async () => {
+    const navigateMock = vi.fn()
+    mockSession('owner')
+    useNavigateMock.mockReturnValue(navigateMock)
+    useQueryClientMock.mockReturnValue({ invalidateQueries: invalidateQueriesMock })
+    useWhatsAppStatusMock.mockReturnValue({
+      isPending: false,
+      data: { state: 'connected', qrCodeDataUrl: null, detail: null, discoveryInProgress: false },
+    })
+    useConnectWhatsAppMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
+    useDiscoverAndSyncMock.mockReturnValue({
+      isPending: false,
+      error: null,
+      mutate: (_vars: unknown, options: { onSuccess: (result: unknown) => void }) => {
+        options.onSuccess({
+          communities: [
+            { id: '1', waId: 'a@g.us', name: 'Downtown Collective' },
+            { id: '2', waId: 'b@g.us', name: 'Chess Club' },
+          ],
+          hiddenNonAdminWaIds: ['b@g.us'],
+          failed: [{ waId: 'c@g.us', name: 'Book Club', reason: 'WhatsApp took too long to respond.' }],
+        })
+      },
+    })
+
+    render(<WhatsAppSetupPage />)
+
+    await userEvent.click(screen.getByRole('button', { name: /discover communities/i }))
+
+    expect(navigateMock).not.toHaveBeenCalled()
+    expect(screen.getByText(/found/i)).toBeInTheDocument()
+    expect(screen.getByText('Chess Club')).toBeInTheDocument()
+    expect(screen.getByText(/isn't an admin there/i)).toBeInTheDocument()
+    expect(screen.getByText(/Book Club/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /continue to dashboard/i }))
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/' })
   })
 })

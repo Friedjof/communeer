@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from communeer.communities.router import _summary
-from communeer.communities.schemas import CommunitySummaryOut
 from communeer.deps import get_current_user, get_db, get_provider, require_role
 from communeer.errors import bad_request, conflict, service_unavailable
 from communeer.models import Community, User, UserRole
@@ -21,7 +20,11 @@ from communeer.providers.whatsapp.base import (
 )
 from communeer.providers.whatsapp.wppconnect import WppconnectProvider
 from communeer.sync.service import SyncInProgressError, sync_community
-from communeer.whatsapp_status.schemas import WhatsAppStatusOut
+from communeer.whatsapp_status.schemas import (
+    DiscoverAndSyncFailureOut,
+    DiscoverAndSyncResultOut,
+    WhatsAppStatusOut,
+)
 
 logger = logging.getLogger("communeer.whatsapp_status")
 
@@ -68,16 +71,27 @@ def connect_whatsapp(provider: WhatsAppProvider = Depends(get_provider)) -> None
         raise service_unavailable("WhatsApp service is unreachable right now. Please try again shortly.") from exc
 
 
+def _discovery_failure_reason(exc: Exception) -> str:
+    """A safe, generic, user-facing explanation for a per-community sync
+    failure — never `str(exc)` directly (could echo transport internals,
+    see `wppconnect.py::_safe_error_detail`'s same reasoning)."""
+    if isinstance(exc, WhatsAppProviderUnavailableError):
+        return "WhatsApp took too long to respond (large communities are more likely to hit this) — try again."
+    if isinstance(exc, SyncInProgressError):
+        return "A sync for this community was already in progress."
+    return "Sync failed unexpectedly — check the server logs for details."
+
+
 @router.post(
     "/whatsapp/discover-and-sync",
-    response_model=list[CommunitySummaryOut],
+    response_model=DiscoverAndSyncResultOut,
     dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
 )
 def discover_and_sync(
     db: Session = Depends(get_db),
     provider: WhatsAppProvider = Depends(get_provider),
     user: User = Depends(get_current_user),
-) -> list[CommunitySummaryOut]:
+) -> DiscoverAndSyncResultOut:
     global _discovery_in_progress
     with _discovery_lock:
         if _discovery_in_progress:
@@ -99,12 +113,12 @@ def discover_and_sync(
         # aborts the whole loop immediately: it means the session itself
         # dropped, so every remaining community would fail identically.
         # Anything else caught here (a per-community `WhatsAppProviderUnavailableError`,
-        # `SyncInProgressError`, or an unexpected bug) is logged and
-        # skipped — the first one is remembered so it can still be raised
-        # as today's clean 503/409/500 if literally nothing could be
-        # synced, rather than silently returning an empty list that reads
-        # exactly like "you have zero communities."
+        # `SyncInProgressError`, or an unexpected bug) is recorded in
+        # `failed` (not just logged) so the caller can actually tell a
+        # community was found but didn't make it, instead of it just never
+        # appearing anywhere with no explanation.
         synced: list[Community] = []
+        failed: list[DiscoverAndSyncFailureOut] = []
         first_error: Exception | None = None
         for provider_community in provider_communities:
             try:
@@ -124,9 +138,20 @@ def discover_and_sync(
                 logger.warning(
                     "Skipping community %s during discovery: %s", provider_community.wa_id, exc
                 )
+                failed.append(
+                    DiscoverAndSyncFailureOut(
+                        wa_id=provider_community.wa_id,
+                        name=provider_community.name,
+                        reason=_discovery_failure_reason(exc),
+                    )
+                )
                 if first_error is None:
                     first_error = exc
 
+        # Same "nothing at all could be synced" escalation as before this
+        # response gained a `failed` list: a *partial* failure is reported
+        # via `failed` below, but a *total* one still raises the same clean
+        # 503/409/500 rather than a technically-200 empty result.
         if not synced and first_error is not None:
             if isinstance(first_error, WhatsAppProviderUnavailableError):
                 raise service_unavailable(
@@ -137,7 +162,21 @@ def discover_and_sync(
                     "A sync for this community is already in progress — please try again shortly."
                 ) from first_error
             raise first_error
+
+        # Same admin-only standing `GET /communities` (communities/router.py)
+        # filters on — computed here too so the Setup page can say, right
+        # after discovery, "found N, M of them won't show up because this
+        # WhatsApp number isn't an admin there" instead of a newly-synced
+        # community just silently never appearing.
+        admin_wa_ids = provider.get_admin_community_wa_ids()
+        hidden_non_admin_wa_ids = (
+            [c.wa_id for c in synced if c.wa_id not in admin_wa_ids] if admin_wa_ids is not None else []
+        )
     finally:
         _discovery_in_progress = False
 
-    return [_summary(db, community) for community in synced]
+    return DiscoverAndSyncResultOut(
+        communities=[_summary(db, community) for community in synced],
+        hidden_non_admin_wa_ids=hidden_non_admin_wa_ids,
+        failed=failed,
+    )

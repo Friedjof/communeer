@@ -1,5 +1,5 @@
 """Normalizes a user-entered phone number into the WhatsApp JID format this
-codebase already uses elsewhere (`Member.wa_id`, e.g. `"491701234567@c.us"`)
+codebase already uses elsewhere (`Member.wa_id`, e.g. `"4915500000000@c.us"`)
 — no phone-validation library dependency, just digit-stripping and a sane
 length check (E.164 allows up to 15 digits; 8 is a generous lower bound for
 "this can't possibly be a real number with a country code").

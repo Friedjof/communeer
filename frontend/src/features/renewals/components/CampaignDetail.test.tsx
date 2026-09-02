@@ -108,13 +108,13 @@ describe('CampaignDetail', () => {
     useSendRenewalReminderMock.mockReturnValue({ mutate, isPending: false, variables: undefined })
     render(
       <TooltipProvider>
-        <CampaignDetail campaignId="campaign-1" groupName="Unity Runners" />
+        <CampaignDetail campaignId="campaign-1" groupName="Maple Street Neighbors" />
       </TooltipProvider>,
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Send reminder' }))
     expect(mutate).not.toHaveBeenCalled()
-    expect(screen.getByText(/Unity Runners/)).toBeInTheDocument()
+    expect(screen.getByText(/Maple Street Neighbors/)).toBeInTheDocument()
     expect(screen.getByText(/We're checking in on who'd like to stay part of/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
