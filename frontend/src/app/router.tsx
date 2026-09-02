@@ -117,10 +117,17 @@ const authenticatedRoute = createRoute({
       throw redirect({ to: '/setup/whatsapp' })
     }
   },
-  component: AuthenticatedLayout,
+  // No `AppShell` here — this route's only job is the session/2FA/WhatsApp
+  // guard above. `/setup/whatsapp` and `/setup/2fa` are direct children of
+  // *this* route (see `authenticatedRouteTree` below) so they render full-
+  // screen and standalone, with zero nav chrome, while they're the only
+  // thing the user is meant to be looking at. `mainAppRoute` below is the
+  // one that actually adds `AppShell`, for every route that comes after
+  // setup is done.
+  component: () => <Outlet />,
 })
 
-/** Coarse top-level section key (`/c`, `/audit`, `/settings`, `/setup`, …) —
+/** Coarse top-level section key (`/c`, `/audit`, `/settings`, …) —
  * deliberately not the full pathname, so switching communities or tabs
  * within `/c/*` doesn't force-remount `AppShell`'s children; it only fades
  * in when moving between fundamentally different sections of the app. */
@@ -141,8 +148,22 @@ function AuthenticatedLayout() {
   )
 }
 
-const indexRoute = createRoute({
+/** Pathless layout adding `AppShell` (topbar + nav) on top of
+ * `authenticatedRoute`'s session guard — every "actual app" route is a
+ * child of this one. `/setup/whatsapp` and `/setup/2fa` are deliberately
+ * NOT: `authenticatedRoute`'s own `beforeLoad` never even lets a session
+ * that hasn't finished setup reach this route in the first place, but
+ * keeping setup's routes out of this subtree too means there's no nav/topbar
+ * to strip back out — setup is full focus, nothing else is ever mounted
+ * alongside it. */
+const mainAppRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
+  id: '_mainApp',
+  component: AuthenticatedLayout,
+})
+
+const indexRoute = createRoute({
+  getParentRoute: () => mainAppRoute,
   path: '/',
   pendingComponent: RoutePendingFallback,
   beforeLoad: async ({ context }) => {
@@ -162,7 +183,7 @@ const indexRoute = createRoute({
 })
 
 const communityLayoutRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
+  getParentRoute: () => mainAppRoute,
   path: 'c/$communityId',
   pendingComponent: RoutePendingFallback,
   beforeLoad: async ({ context, params }) => {
@@ -297,7 +318,7 @@ const groupMembersDeepLinkRoute = createRoute({
 })
 
 const auditRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
+  getParentRoute: () => mainAppRoute,
   path: '/audit',
   pendingComponent: RoutePendingFallback,
   component: () => (
@@ -308,7 +329,7 @@ const auditRoute = createRoute({
 })
 
 const settingsRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
+  getParentRoute: () => mainAppRoute,
   path: '/settings',
   pendingComponent: RoutePendingFallback,
   component: () => (
@@ -338,14 +359,9 @@ const communityRouteTree = communityLayoutRoute.addChildren([
   groupMembersDeepLinkRoute,
 ])
 
-const authenticatedRouteTree = authenticatedRoute.addChildren([
-  indexRoute,
-  communityRouteTree,
-  auditRoute,
-  settingsRoute,
-  whatsappSetupRoute,
-  totpSetupRoute,
-])
+const mainAppRouteTree = mainAppRoute.addChildren([indexRoute, communityRouteTree, auditRoute, settingsRoute])
+
+const authenticatedRouteTree = authenticatedRoute.addChildren([mainAppRouteTree, whatsappSetupRoute, totpSetupRoute])
 
 const routeTree = rootRoute.addChildren([loginRoute, claimRoute, authenticatedRouteTree])
 
