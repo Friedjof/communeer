@@ -28,7 +28,8 @@ interface GroupMemberRowActionsProps {
 export function GroupMemberRowActions({ groupId, member }: GroupMemberRowActionsProps) {
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false)
   const session = useSession()
-  const canManage = session.data?.role === 'owner' || session.data?.role === 'admin'
+  const canManage =
+    session.data?.role === 'owner' || session.data?.role === 'admin' || session.data?.role === 'group_admin'
   const promote = usePromoteGroupMember(groupId)
   const demote = useDemoteGroupMember(groupId)
   const remove = useRemoveGroupMember(groupId)

@@ -10,10 +10,19 @@ from communeer.groups.service import (
     remove_group_member,
     set_group_member_admin,
 )
-from communeer.models import Community, Group, GroupMembership, Member, MembershipStatus
+from communeer.models import (
+    Community,
+    Group,
+    GroupMembership,
+    Member,
+    MembershipStatus,
+    User,
+    UserRole,
+)
 from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
 from communeer.providers.whatsapp.mock import MockWhatsAppProvider
 from communeer.sync.service import sync_community
+from tests.conftest import login_as_admin as _login
 
 UNITY_WA_ID = "120363010000000001@g.us"
 
@@ -182,6 +191,48 @@ def test_promote_then_demote_round_trips(db_session):
     assert demoted.is_admin is False
 
 
+def test_promote_group_member_auto_provisions_a_group_admin_account(db_session):
+    """`set_group_member_admin` is the manual dashboard-promote call site
+    (see `auth/provisioning.py`'s module docstring) — the other write path,
+    `sync_community`, is covered separately (`test_provisioning.py`,
+    `test_sync_provisioning.py`)."""
+    _sync_unity(db_session)
+    marketplace = _get_group(db_session, "Marketplace")
+    _membership, member = _get_member_membership(db_session, marketplace)
+
+    no_account_yet = db_session.execute(select(User).where(User.member_id == member.id)).scalar_one_or_none()
+    assert no_account_yet is None
+
+    set_group_member_admin(db_session, MockWhatsAppProvider(), marketplace, member.id, True, actor_user_id=None)
+
+    provisioned = db_session.execute(select(User).where(User.member_id == member.id)).scalar_one()
+    assert provisioned.role is UserRole.group_admin
+    assert provisioned.is_claimed is False
+    assert provisioned.is_active is True
+
+
+def test_demoting_does_not_deactivate_the_provisioned_account(db_session):
+    """Demotion only needs to make the *derived* permission empty (see
+    `authz.py::get_administered_group_ids` — covered in
+    `test_authz_scope.py`); the account itself is never touched, so a later
+    re-promotion doesn't need a new claim."""
+    _sync_unity(db_session)
+    marketplace = _get_group(db_session, "Marketplace")
+    _membership, member = _get_member_membership(db_session, marketplace)
+
+    provider = MockWhatsAppProvider()
+    set_group_member_admin(db_session, provider, marketplace, member.id, True, actor_user_id=None)
+    provisioned = db_session.execute(select(User).where(User.member_id == member.id)).scalar_one()
+    provisioned_id = provisioned.id
+
+    set_group_member_admin(db_session, provider, marketplace, member.id, False, actor_user_id=None)
+
+    still_there = db_session.get(User, provisioned_id)
+    assert still_there is not None
+    assert still_there.is_active is True
+    assert still_there.role is UserRole.group_admin
+
+
 def test_demoting_the_only_remaining_admin_is_blocked(db_session):
     _sync_unity(db_session)
     # "Events" has exactly one group admin in the mock fixture.
@@ -219,9 +270,6 @@ def test_remove_member_not_in_group_raises_not_found(db_session):
 # ---------------------------------------------------------------------------
 
 
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
 
 
 def _seed_viewer_user() -> None:

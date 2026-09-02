@@ -310,12 +310,17 @@ def send_renewal_reminder(
     return confirmation
 
 
-def apply_renewal_decline_reaction(db: Session, message_id: str) -> bool:
-    """Called from `webhooks/router.py` when a ❌ reaction arrives. Looks up
-    the still-`pending` confirmation whose reminder this message id belongs
-    to; returns `False` (a pure no-op) if none matches, so the webhook can
-    fall back to its normal group-activity handling for a reaction that has
-    nothing to do with a renewal."""
+def apply_renewal_decline_reaction(
+    db: Session, message_id: str, actor_user_id: uuid.UUID | None = None
+) -> bool:
+    """Called from `webhooks/router.py` when a ❌ reaction arrives (no
+    `actor_user_id` there — it's a WhatsApp event, not an admin action) and
+    from `check_renewal_reactions`'s manual pull below (which does pass the
+    admin who clicked "Check reactions"). Looks up the still-`pending`
+    confirmation whose reminder this message id belongs to; returns `False`
+    (a pure no-op) if none matches, so the webhook can fall back to its
+    normal group-activity handling for a reaction that has nothing to do
+    with a renewal."""
     confirmation = db.execute(
         select(RenewalConfirmation).where(
             RenewalConfirmation.reminder_message_id == message_id,
@@ -328,7 +333,7 @@ def apply_renewal_decline_reaction(db: Session, message_id: str) -> bool:
     confirmation.declined_at = datetime.now(UTC)
     db.add(
         AuditEvent(
-            actor_user_id=None,
+            actor_user_id=actor_user_id,
             action="renewal.declined_via_reaction",
             target_type="member",
             target_id=str(confirmation.member_id),
@@ -339,11 +344,15 @@ def apply_renewal_decline_reaction(db: Session, message_id: str) -> bool:
     return True
 
 
-def apply_renewal_confirm_reaction(db: Session, message_id: str) -> bool:
-    """Called from `webhooks/router.py` when a 👍 reaction arrives. Same
-    lookup/no-op contract as `apply_renewal_decline_reaction`. Clears an
-    earlier `declined_at` too — reacting 👍 after an earlier ❌ is read as
-    "changed my mind", not ignored."""
+def apply_renewal_confirm_reaction(
+    db: Session, message_id: str, actor_user_id: uuid.UUID | None = None
+) -> bool:
+    """Called from `webhooks/router.py` when a 👍 reaction arrives (no
+    `actor_user_id`, same reasoning as `apply_renewal_decline_reaction`) and
+    from `check_renewal_reactions`'s manual pull below. Same lookup/no-op
+    contract as `apply_renewal_decline_reaction`. Clears an earlier
+    `declined_at` too — reacting 👍 after an earlier ❌ is read as "changed
+    my mind", not ignored."""
     confirmation = db.execute(
         select(RenewalConfirmation).where(
             RenewalConfirmation.reminder_message_id == message_id,
@@ -358,7 +367,7 @@ def apply_renewal_confirm_reaction(db: Session, message_id: str) -> bool:
     confirmation.declined_at = None
     db.add(
         AuditEvent(
-            actor_user_id=None,
+            actor_user_id=actor_user_id,
             action="renewal.confirmed_via_reaction",
             target_type="member",
             target_id=str(confirmation.member_id),
@@ -461,7 +470,9 @@ def delete_campaign(db: Session, campaign: RenewalCampaign, actor_user_id: uuid.
     db.commit()
 
 
-def check_renewal_reactions(db: Session, provider: WhatsAppProvider, campaign: RenewalCampaign) -> int:
+def check_renewal_reactions(
+    db: Session, provider: WhatsAppProvider, campaign: RenewalCampaign, actor_user_id: uuid.UUID | None = None
+) -> int:
     """Pull-based counterpart to the webhook: actively asks the provider
     what reaction (if any) currently sits on each still-`pending`,
     already-sent confirmation's reminder message, and applies the same
@@ -503,10 +514,10 @@ def check_renewal_reactions(db: Session, provider: WhatsAppProvider, campaign: R
             continue
 
         if reaction == RENEWAL_CONFIRM_REACTION:
-            if apply_renewal_confirm_reaction(db, confirmation.reminder_message_id):
+            if apply_renewal_confirm_reaction(db, confirmation.reminder_message_id, actor_user_id):
                 updated += 1
         elif reaction == RENEWAL_DECLINE_REACTION and apply_renewal_decline_reaction(
-            db, confirmation.reminder_message_id
+            db, confirmation.reminder_message_id, actor_user_id
         ):
             updated += 1
 

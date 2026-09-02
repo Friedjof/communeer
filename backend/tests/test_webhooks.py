@@ -7,14 +7,14 @@ members at app-lifespan startup, so real group/member rows can be looked up
 via the ordinary read endpoints rather than hand-constructing fixture data.
 """
 
+import uuid as uuid_module
 from datetime import UTC, datetime, timedelta
+
+from tests.conftest import login_as_admin as _login
 
 TEST_SECRET = "test-webhook-secret"  # set in conftest.py's WEBHOOK_SECRET env var
 
 
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
 
 
 def _unity_general_group_and_members(client) -> tuple[dict, list[dict]]:
@@ -89,6 +89,135 @@ def test_webhook_onmessage_updates_activity_forward_only_and_last_message_at(cli
     advanced = next(m for m in advanced_members if m["waId"] == member_wa_id)
     assert advanced["lastActivityAt"] != first_activity_at
     assert advanced["lastActivityContent"] == "a fresh, newer message"
+
+
+def _group_messages(group_id: str) -> list:
+    from sqlalchemy import select
+
+    from communeer.db import SessionLocal
+    from communeer.models import GroupMessage
+
+    db = SessionLocal()
+    try:
+        return list(
+            db.execute(select(GroupMessage).where(GroupMessage.group_id == uuid_module.UUID(group_id))).scalars()
+        )
+    finally:
+        db.close()
+
+
+def test_webhook_onmessage_stores_message_history_row(client):
+    group, members = _unity_general_group_and_members(client)
+    group_wa_id = group["waId"]
+    member = members[0]
+    member_wa_id = member["waId"]
+
+    before_count = len(_group_messages(group["id"]))
+    sent_t = int((datetime.now(UTC) - timedelta(minutes=5)).timestamp())
+    payload = {
+        "event": "onmessage",
+        "session": "communeer",
+        "type": "chat",
+        "fromMe": False,
+        "chatId": group_wa_id,
+        "author": member_wa_id,
+        "t": sent_t,
+        "id": "wa-message-history-1",
+        "body": "message history test body",
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+
+    rows = _group_messages(group["id"])
+    assert len(rows) == before_count + 1
+    stored = next(r for r in rows if r.wa_message_id == "wa-message-history-1")
+    assert stored.content == "message history test body"
+    assert stored.message_type.value == "text"
+    assert stored.member_id is not None
+
+    # Idempotency: posting the exact same event again must not create a
+    # second row for the same (group, wa_message_id).
+    response2 = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response2.status_code == 200
+    assert len(_group_messages(group["id"])) == before_count + 1
+
+
+def test_webhook_onmessage_without_id_updates_activity_but_stores_no_history_row(client):
+    """A payload with no usable `id` field must still stamp
+    `last_activity_*`/`last_message_at` (unaffected by this feature) but
+    can't be stored as history — there's nothing to dedupe on."""
+    group, members = _unity_general_group_and_members(client)
+    member = members[0]
+    before_count = len(_group_messages(group["id"]))
+
+    payload = {
+        "event": "onmessage",
+        "session": "communeer",
+        "type": "chat",
+        "fromMe": False,
+        "chatId": group["waId"],
+        "author": member["waId"],
+        "t": int((datetime.now(UTC) - timedelta(minutes=1)).timestamp()),
+        "body": "no id on this one",
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+    assert len(_group_messages(group["id"])) == before_count
+
+    updated_members = client.get(f"/api/v1/groups/{group['id']}/members").json()
+    updated = next(m for m in updated_members if m["waId"] == member["waId"])
+    assert updated["lastActivityContent"] == "no id on this one"
+
+
+def test_webhook_onmessage_media_without_caption_stores_placeholder(client):
+    group, members = _unity_general_group_and_members(client)
+    member = members[0]
+
+    payload = {
+        "event": "onmessage",
+        "session": "communeer",
+        "type": "image",
+        "fromMe": False,
+        "chatId": group["waId"],
+        "author": member["waId"],
+        "t": int((datetime.now(UTC) - timedelta(minutes=2)).timestamp()),
+        "id": "wa-message-media-1",
+        "body": "",
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+
+    rows = _group_messages(group["id"])
+    stored = next(r for r in rows if r.wa_message_id == "wa-message-media-1")
+    assert stored.message_type.value == "media"
+    assert stored.content == "[media message]"
+
+
+def test_webhook_onreactionmessage_never_creates_history_row(client):
+    group, members = _unity_general_group_and_members(client)
+    # Deliberately `members[0]`, not `[1]` — `[1]` is reserved for
+    # `test_webhook_onreactionmessage_updates_activity_but_not_last_message_at`
+    # below, which shares this session-scoped DB and would otherwise have its
+    # forward-only `lastActivityContent` assertion clobbered by this test's
+    # own reaction if they targeted the same membership.
+    member = members[0]
+    before_count = len(_group_messages(group["id"]))
+
+    payload = {
+        "event": "onreactionmessage",
+        "session": "communeer",
+        "id": {"fromMe": False, "remote": group["waId"], "id": "reaction-history-1", "participant": None},
+        "msgId": {"fromMe": False, "remote": group["waId"], "id": "some-message-id", "participant": None},
+        "reactionText": "🙂",
+        "read": False,
+        "sender": member["waId"],
+        "orphan": 0,
+        "orphanReason": None,
+        "timestamp": int(datetime.now(UTC).timestamp()),
+    }
+    response = client.post(f"/api/v1/webhooks/wppconnect/{TEST_SECRET}", json=payload)
+    assert response.status_code == 200
+    assert len(_group_messages(group["id"])) == before_count
 
 
 def test_webhook_onreactionmessage_updates_activity_but_not_last_message_at(client):

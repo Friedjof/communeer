@@ -98,7 +98,9 @@ class MemberAggregate:
     last_activity_content: str | None
 
 
-def list_community_members(db: Session, community: Community) -> list[MemberAggregate]:
+def list_community_members(
+    db: Session, community: Community, *, group_ids_filter: set[uuid.UUID] | None = None
+) -> list[MemberAggregate]:
     """Every member of `community` (status == "member" in at least one of its
     groups), with admin/community-admin/group-count aggregates computed
     across that community's groups only.
@@ -113,8 +115,15 @@ def list_community_members(db: Session, community: Community) -> list[MemberAggr
     community's groups (same "per-community, not global" reasoning as
     `joined_at` — just max instead of min, since more-recent activity in any
     one of a member's groups is the more relevant signal).
+
+    `group_ids_filter`: when given, narrows the aggregation to only these
+    groups within the community — used by `communities/router.py` to scope
+    a `group_admin`'s view down to the group(s) they administer. `None` (the
+    default, used by every owner/admin/viewer call site) is a complete no-op.
     """
     group_ids = get_group_ids_for_community(db, community.id)
+    if group_ids_filter is not None:
+        group_ids = [g for g in group_ids if g in group_ids_filter]
     if not group_ids:
         return []
 
@@ -186,17 +195,22 @@ class GroupHistorySeries:
     snapshots: list[GroupMemberSnapshot]
 
 
-def get_group_history_for_community(db: Session, community_id: uuid.UUID) -> list[GroupHistorySeries]:
+def get_group_history_for_community(
+    db: Session, community_id: uuid.UUID, *, group_ids_filter: set[uuid.UUID] | None = None
+) -> list[GroupHistorySeries]:
     """Every group's growth-history data points, in one pass — the point of
     this endpoint is a single response the frontend can build a per-group
     comparison chart from, instead of firing one request per group.
 
     All snapshots for all of the community's groups are fetched in a single
     query (instead of one query per group) and then split back out per group
-    in Python, preserving each group's chronological (oldest-first) order."""
-    groups = db.execute(
-        select(Group).where(Group.community_id == community_id).order_by(Group.name)
-    ).scalars().all()
+    in Python, preserving each group's chronological (oldest-first) order.
+
+    `group_ids_filter`: see `list_community_members`'s identical parameter."""
+    query = select(Group).where(Group.community_id == community_id)
+    if group_ids_filter is not None:
+        query = query.where(Group.id.in_(group_ids_filter))
+    groups = db.execute(query.order_by(Group.name)).scalars().all()
 
     snapshots_by_group: dict[uuid.UUID, list[GroupMemberSnapshot]] = {}
     if groups:

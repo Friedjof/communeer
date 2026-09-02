@@ -20,7 +20,8 @@ export function GroupRequestsTab({ groupId }: GroupRequestsTabProps) {
   const approve = useApproveJoinRequest(groupId)
   const reject = useRejectJoinRequest(groupId)
   const session = useSession()
-  const canManage = session.data?.role === 'owner' || session.data?.role === 'admin'
+  const canManage =
+    session.data?.role === 'owner' || session.data?.role === 'admin' || session.data?.role === 'group_admin'
 
   if (requests.isPending) {
     return <ListSkeleton count={4} />

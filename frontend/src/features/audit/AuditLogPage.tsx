@@ -11,9 +11,18 @@ const ACTION_OPTIONS = [
   'auth.login',
   'auth.login_failed',
   'auth.logout',
+  'auth.claimed',
   'community.sync',
   'renewal.started',
   'renewal.confirmed',
+  'moderation.dismissed',
+  'group.request.approved',
+  'group.request.rejected',
+  'group.member.removed',
+  'group.member.promoted',
+  'group.member.demoted',
+  'user.auto_provisioned',
+  'user.claim_code_resent',
 ]
 
 const TARGET_TYPE_OPTIONS = ['user', 'community', 'member']

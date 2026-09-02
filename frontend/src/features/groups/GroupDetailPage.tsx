@@ -4,6 +4,7 @@ import { ErrorState } from '@/components/feedback/ErrorState'
 import { ListSkeleton } from '@/components/feedback/LoadingSkeletons'
 import { GroupAdvancedTab } from './components/GroupAdvancedTab'
 import { GroupMembersTab } from './components/GroupMembersTab'
+import { GroupMessagesTab } from './components/GroupMessagesTab'
 import { GroupOverviewTab } from './components/GroupOverviewTab'
 import { GroupRenewalsTab } from './components/GroupRenewalsTab'
 import { GroupRequestsTab } from './components/GroupRequestsTab'
@@ -55,6 +56,7 @@ export function GroupDetailPage({
             ) : null}
           </TabsTrigger>
           <TabsTrigger value="renewals">Renewals</TabsTrigger>
+          <TabsTrigger value="messages">Messages</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
@@ -68,6 +70,9 @@ export function GroupDetailPage({
         </TabsContent>
         <TabsContent value="renewals">
           <GroupRenewalsTab groupId={groupId} selectedCampaignId={selectedCampaignId} onSelectCampaign={onSelectCampaign} />
+        </TabsContent>
+        <TabsContent value="messages">
+          <GroupMessagesTab groupId={groupId} />
         </TabsContent>
         <TabsContent value="advanced">
           <GroupAdvancedTab groupId={groupId} />

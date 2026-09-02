@@ -22,8 +22,13 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
+      // Any 4xx (not just 401) is a client error a retry can never fix —
+      // the resource still won't exist, the request still won't be
+      // authorized, the payload still won't validate. Retrying one anyway
+      // just adds a few seconds of silent "still loading" before the
+      // (already-determined) error state finally shows up.
       retry: (failureCount, error) => {
-        if (error instanceof ApiError && error.status === 401) return false
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false
         return failureCount < 2
       },
     },

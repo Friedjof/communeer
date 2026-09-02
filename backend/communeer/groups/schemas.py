@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from communeer.models import ActivityType, MembershipStatus
+from communeer.models import ActivityType, MembershipStatus, MessageType
 from communeer.schemas import CamelModel
 
 
@@ -49,6 +49,20 @@ class GroupRequestOut(CamelModel):
     wa_id: str
     display_name: str
     requested_at: datetime | None
+
+
+class GroupMessageOut(CamelModel):
+    id: uuid.UUID
+    # The sending member — `None` if `member_id` couldn't be resolved to a
+    # `Member` (see `models/message.py`'s `member_id`'s `SET NULL` posture);
+    # a real, if currently unobserved, possibility to render defensively for.
+    member_id: uuid.UUID | None
+    display_name: str | None
+    avatar_url: str | None
+    wa_id: str | None
+    message_type: MessageType
+    content: str | None
+    sent_at: datetime
 
 
 class GroupInviteLinkOut(CamelModel):

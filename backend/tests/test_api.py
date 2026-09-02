@@ -1,3 +1,6 @@
+from tests.conftest import login_as_admin as _login
+
+
 def test_sync_route_returns_503_when_provider_is_unavailable(client, monkeypatch):
     """`sync_community` translating a transport failure into
     `WhatsAppProviderUnavailableError` (see `providers/whatsapp/wppconnect.py`)
@@ -6,7 +9,7 @@ def test_sync_route_returns_503_when_provider_is_unavailable(client, monkeypatch
     import communeer.sync.router as sync_router_module
     from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
 
-    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    _login(client)
     unity_alpha = next(c for c in client.get("/api/v1/communities").json() if c["name"] == "Unity Alpha")
 
     def _raise_unavailable(*args, **kwargs):
@@ -28,7 +31,7 @@ def test_sync_route_returns_409_when_a_sync_is_already_in_progress(client, monke
     import communeer.sync.router as sync_router_module
     from communeer.sync.service import SyncInProgressError
 
-    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    _login(client)
     unity_alpha = next(c for c in client.get("/api/v1/communities").json() if c["name"] == "Unity Alpha")
 
     def _raise_in_progress(*args, **kwargs):
@@ -54,20 +57,21 @@ def test_login_sync_list_members_audit_flow(client):
     # unauthenticated -> 401
     assert client.get("/api/v1/session").status_code == 401
 
-    # login
-    login_response = client.post(
-        "/api/v1/auth/login", json={"username": "admin", "password": "changeme123"}
-    )
+    # password step: the seeded admin has mandatory 2FA (owner role), so this
+    # must come back as "requires TOTP", not a full session yet.
+    login_response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
     assert login_response.status_code == 200
-    login_body = login_response.json()
-    assert login_body["username"] == "admin"
-    assert login_body["role"] == "owner"
-    assert "communeer_session" in client.cookies
+    assert login_response.json()["requiresTotp"] is True
+    assert "communeer_session" not in client.cookies
 
     # bad credentials -> 401, envelope shape, no cookie change
     bad_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "wrong"})
     assert bad_login.status_code == 401
     assert bad_login.json()["error"]["code"] == "unauthorized"
+
+    # TOTP step completes the login.
+    _login(client)
+    assert "communeer_session" in client.cookies
 
     # session reflects the logged-in user
     session_response = client.get("/api/v1/session")
@@ -178,11 +182,12 @@ def test_viewer_role_gets_403_on_sync_but_owner_gets_200(client):
 
     # log in as owner first just to discover the community id, then log
     # back out before the viewer assertions.
-    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    _login(client)
     communities = client.get("/api/v1/communities").json()
     unity_alpha = next(c for c in communities if c["name"] == "Unity Alpha")
     client.post("/api/v1/auth/logout")
 
+    # viewer role has no mandatory 2FA — a single-step login.
     viewer_login = client.post("/api/v1/auth/login", json={"username": "viewer", "password": "viewer-password-123"})
     assert viewer_login.status_code == 200
     assert viewer_login.json()["role"] == "viewer"
@@ -193,12 +198,12 @@ def test_viewer_role_gets_403_on_sync_but_owner_gets_200(client):
 
     client.post("/api/v1/auth/logout")
 
-    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    _login(client)
     assert client.post(f"/api/v1/communities/{unity_alpha['id']}/sync").status_code == 200
 
 
 def test_advanced_query_param_includes_raw_metadata(client):
-    client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
+    _login(client)
     communities = client.get("/api/v1/communities").json()
     unity_alpha = next(c for c in communities if c["name"] == "Unity Alpha")
 

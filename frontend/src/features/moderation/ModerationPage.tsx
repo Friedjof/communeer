@@ -4,7 +4,9 @@ import { ListSkeleton } from '@/components/feedback/LoadingSkeletons'
 import { MemberDetailDialog } from '@/features/members/components/MemberDetailDialog'
 import { AdminCoverageGapsSection } from './components/AdminCoverageGapsSection'
 import { CapacityAttentionSection } from './components/CapacityAttentionSection'
+import { DuplicateContentSection } from './components/DuplicateContentSection'
 import { JoinBurstsSection } from './components/JoinBurstsSection'
+import { MessageBurstsSection } from './components/MessageBurstsSection'
 import { ModerationHowItWorks } from './components/ModerationHowItWorks'
 import { NeverActiveMembersSection } from './components/NeverActiveMembersSection'
 import { useModerationQueue } from './queries'
@@ -47,6 +49,8 @@ export function ModerationPage({ communityId }: ModerationPageProps) {
           />
           <JoinBurstsSection communityId={communityId} bursts={queue.data.joinBursts} />
           <CapacityAttentionSection communityId={communityId} groups={queue.data.capacityAttention} />
+          <MessageBurstsSection communityId={communityId} bursts={queue.data.messageBursts} />
+          <DuplicateContentSection communityId={communityId} duplicates={queue.data.duplicateContent} />
         </div>
       )}
 

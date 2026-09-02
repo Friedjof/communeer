@@ -20,7 +20,10 @@ import { CommunityShell } from '@/components/layout/CommunityShell'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { RoutePendingFallback } from '@/components/feedback/LoadingSkeletons'
 import { sessionQueryOptions } from '@/features/auth/queries'
+import { isTotpRequired, type SessionUser } from '@/features/auth/types'
+import { ClaimPage } from '@/features/auth/ClaimPage'
 import { LoginPage } from '@/features/auth/LoginPage'
+import { TotpSetupPage } from '@/features/auth/TotpSetupPage'
 import { communitiesQueryOptions } from '@/features/communities/queries'
 import type { GroupDetailTab } from '@/features/groups/types'
 import { WhatsAppSetupPage } from '@/features/whatsapp/WhatsAppSetupPage'
@@ -64,6 +67,12 @@ const loginRoute = createRoute({
   component: LoginPage,
 })
 
+const claimRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/claim',
+  component: ClaimPage,
+})
+
 /**
  * Pathless authenticated layout: every descendant route requires a valid
  * session. `beforeLoad` fetches `GET /api/v1/session` through the query
@@ -76,13 +85,31 @@ const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: '_authenticated',
   beforeLoad: async ({ context, location }) => {
+    let session: SessionUser
     try {
-      await context.queryClient.ensureQueryData(sessionQueryOptions())
+      session = await context.queryClient.ensureQueryData(sessionQueryOptions())
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         throw redirect({ to: '/login' })
       }
       throw error
+    }
+
+    // WhatsApp-OTP alone also satisfies the mandatory-2FA requirement (see
+    // `deps.get_current_user`'s OR-gate) — a user who enabled it and then
+    // disabled TOTP must not be redirected here forever even though the
+    // backend never blocks them.
+    if (isTotpRequired(session.role) && !session.totpEnabled && !session.whatsappOtpEnabled) {
+      if (location.pathname !== '/setup/2fa') {
+        throw redirect({ to: '/setup/2fa' })
+      }
+      // Already on the mandatory-setup page itself: stop here. `GET
+      // /whatsapp/status` below isn't exempt from the mandatory-2FA gate
+      // (see `deps.py`'s `_TOTP_SETUP_EXEMPT_PATHS`), so calling it before
+      // the user has any factor enabled would 428 — an error this loader
+      // doesn't catch, which used to surface as an unhandled "Something
+      // went wrong!" screen instead of the setup form.
+      return
     }
 
     const whatsapp = await context.queryClient.ensureQueryData(whatsappStatusQueryOptions())
@@ -117,6 +144,7 @@ function AuthenticatedLayout() {
 const indexRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/',
+  pendingComponent: RoutePendingFallback,
   beforeLoad: async ({ context }) => {
     const communities = await context.queryClient.ensureQueryData(communitiesQueryOptions())
     if (communities.length === 0) return
@@ -136,7 +164,22 @@ const indexRoute = createRoute({
 const communityLayoutRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: 'c/$communityId',
-  beforeLoad: ({ params }) => {
+  pendingComponent: RoutePendingFallback,
+  beforeLoad: async ({ context, params }) => {
+    // `params.communityId` can be stale — a bookmark, browser-history entry,
+    // or a leftover value from before a DB reset/re-discovery — and unlike
+    // `indexRoute` (which only ever picks an id it just confirmed exists),
+    // nothing validates it here otherwise. An unvalidated id used to reach
+    // `CommunityShell` straight through, which then fired `/groups` and
+    // `/moderation/queue` against a community that doesn't exist: repeated
+    // 404s and a broken-looking, effectively blank page instead of a clean
+    // recovery. Validate against the live list and bounce back to `/`
+    // (which re-picks a real community, or shows the empty state) the same
+    // way `indexRoute` already does.
+    const communities = await context.queryClient.ensureQueryData(communitiesQueryOptions())
+    if (!communities.some((community) => community.id === params.communityId)) {
+      throw redirect({ to: '/' })
+    }
     useUiStore.getState().setSelectedCommunityId(params.communityId)
   },
   component: CommunityLayoutComponent,
@@ -186,7 +229,7 @@ interface GroupDetailSearch {
   campaignId?: string
 }
 
-const VALID_TABS: GroupDetailTab[] = ['overview', 'members', 'requests', 'renewals', 'advanced']
+const VALID_TABS: GroupDetailTab[] = ['overview', 'members', 'requests', 'renewals', 'messages', 'advanced']
 
 const groupDetailRoute = createRoute({
   getParentRoute: () => communityLayoutRoute,
@@ -281,6 +324,12 @@ const whatsappSetupRoute = createRoute({
   component: WhatsAppSetupPage,
 })
 
+const totpSetupRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/setup/2fa',
+  component: TotpSetupPage,
+})
+
 const communityRouteTree = communityLayoutRoute.addChildren([
   communityIndexRoute,
   communityMembersRoute,
@@ -295,9 +344,10 @@ const authenticatedRouteTree = authenticatedRoute.addChildren([
   auditRoute,
   settingsRoute,
   whatsappSetupRoute,
+  totpSetupRoute,
 ])
 
-const routeTree = rootRoute.addChildren([loginRoute, authenticatedRouteTree])
+const routeTree = rootRoute.addChildren([loginRoute, claimRoute, authenticatedRouteTree])
 
 export const router = createRouter({
   routeTree,

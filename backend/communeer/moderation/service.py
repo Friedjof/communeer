@@ -9,10 +9,14 @@ WhatsApp itself, the same posture already established by
 connected account can't actually act on in WhatsApp never shows fabricated
 "needs attention" data here (empty result instead).
 
-Explicitly out of scope (see the approved plan): per-member message-frequency
-or spam-burst detection, and duplicate-content detection — neither is
-possible with what's stored (only the *latest* activity per membership, never
-a history of messages).
+`message_bursts` and `duplicate_content` (added once `GroupMessage` history —
+see `models/message.py` — existed to compute them from): live signals over
+the last few minutes/hours of message history, not a retrospective scan over
+all of it. Still explicitly out of scope: cross-member coordinated spam
+(different senders posting the same content), fuzzy/semantic duplicate
+detection, and keyword/NLP content moderation — each a materially different,
+noisier feature than "does this one member's own message history look
+spammy," not a byproduct of having message history at all.
 """
 
 import uuid
@@ -34,12 +38,15 @@ from communeer.models import (
     Community,
     Group,
     GroupMembership,
+    GroupMessage,
+    Member,
     MembershipStatus,
+    MessageType,
     ModerationDismissal,
 )
 from communeer.providers.whatsapp.base import WhatsAppProvider
 
-# The four `ModerationQueueData` section names — also the only valid
+# The six `ModerationQueueData` section names — also the only valid
 # `section` values for `dismiss_moderation_item()` and the wire-level
 # `DismissModerationItemIn.section` literal.
 MODERATION_SECTIONS = (
@@ -47,6 +54,8 @@ MODERATION_SECTIONS = (
     "never_active_members",
     "join_bursts",
     "capacity_attention",
+    "message_bursts",
+    "duplicate_content",
 )
 
 # Groups with this many admins or fewer are a single point of failure: if the
@@ -69,6 +78,21 @@ CAPACITY_ATTENTION_THRESHOLD = 90
 JOIN_BURST_WINDOW = timedelta(hours=24)
 JOIN_BURST_MIN_FRACTION = 0.3
 JOIN_BURST_MIN_ABSOLUTE = 5
+
+# "Message burst" heuristic: a member posting unusually fast right now — a
+# live snapshot over a short trailing window, not a scan over all history
+# (keeps the query cheap: one grouped query filtered to a few minutes).
+MESSAGE_BURST_WINDOW = timedelta(minutes=10)
+MESSAGE_BURST_MIN_COUNT = 8
+
+# "Duplicate content" heuristic: the same member posting the exact same text
+# repeatedly within a day — self-repetition only (copy-paste spam), not
+# cross-member matching (see module docstring). Short messages ("ok", an
+# emoji) are excluded via the length floor so routine replies never trigger
+# this.
+DUPLICATE_CONTENT_WINDOW = timedelta(hours=24)
+DUPLICATE_CONTENT_MIN_COUNT = 3
+DUPLICATE_CONTENT_MIN_LENGTH = 15
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -107,11 +131,40 @@ class CapacityAttentionGroup:
 
 
 @dataclass
+class MessageBurst:
+    # The only section whose `target_id` is a `GroupMembership.id` rather
+    # than a bare `group_id`/`member_id` — this signal is inherently a
+    # (group, member) pair, and `GroupMembership.id` is already the natural
+    # key for exactly that pair (`uq_group_membership`).
+    group_membership_id: uuid.UUID
+    group_id: uuid.UUID
+    group_name: str
+    member_id: uuid.UUID
+    member_display_name: str
+    member_avatar_url: str | None
+    message_count: int
+    window_minutes: int
+
+
+@dataclass
+class DuplicateContentGroup:
+    group_membership_id: uuid.UUID
+    group_id: uuid.UUID
+    group_name: str
+    member_id: uuid.UUID
+    member_display_name: str
+    content_preview: str
+    occurrence_count: int
+
+
+@dataclass
 class ModerationQueueData:
     admin_coverage_gaps: list[AdminCoverageGap]
     never_active_members: list[MemberAggregate]
     join_bursts: list[JoinBurstGroup]
     capacity_attention: list[CapacityAttentionGroup]
+    message_bursts: list[MessageBurst]
+    duplicate_content: list[DuplicateContentGroup]
 
 
 def _get_groups_for_community(db: Session, community_id: uuid.UUID) -> list[Group]:
@@ -324,6 +377,153 @@ def get_capacity_attention_groups(db: Session, community: Community) -> list[Cap
     return results
 
 
+def get_message_bursts(db: Session, community: Community) -> list[MessageBurst]:
+    """Members currently mid-burst: `MESSAGE_BURST_MIN_COUNT` or more
+    messages in one group within the trailing `MESSAGE_BURST_WINDOW` — see
+    the module-level constants' docstring for why this stays a live snapshot
+    rather than a scan over all history. Self-expiring: a member who stops
+    posting falls out of this list on the next read once the window passes,
+    nothing to dismiss-and-forget the way `never_active_members` needs.
+
+    A dismissed (group, member) pair is suppressed unless its current
+    `message_count` has grown past the value it had at dismissal time."""
+    dismissals = _get_dismissals(db, community.id, "message_bursts")
+    groups = _get_groups_for_community(db, community.id)
+    if not groups:
+        return []
+    group_ids = [group.id for group in groups]
+
+    window_start = datetime.now(UTC) - MESSAGE_BURST_WINDOW
+    counts = db.execute(
+        select(GroupMessage.group_id, GroupMessage.member_id, func.count(GroupMessage.id))
+        .where(
+            GroupMessage.group_id.in_(group_ids),
+            GroupMessage.member_id.is_not(None),
+            GroupMessage.sent_at >= window_start,
+        )
+        .group_by(GroupMessage.group_id, GroupMessage.member_id)
+        .having(func.count(GroupMessage.id) >= MESSAGE_BURST_MIN_COUNT)
+    ).all()
+    if not counts:
+        return []
+
+    hit_group_ids = {group_id for group_id, _member_id, _count in counts}
+    hit_member_ids = {member_id for _group_id, member_id, _count in counts}
+    memberships_by_pair = {
+        (m.group_id, m.member_id): m
+        for m in db.execute(
+            select(GroupMembership).where(
+                GroupMembership.group_id.in_(hit_group_ids), GroupMembership.member_id.in_(hit_member_ids)
+            )
+        ).scalars()
+    }
+    groups_by_id = {group.id: group for group in groups}
+    members_by_id = {m.id: m for m in db.execute(select(Member).where(Member.id.in_(hit_member_ids))).scalars()}
+
+    window_minutes = int(MESSAGE_BURST_WINDOW.total_seconds() // 60)
+    results = []
+    for group_id, member_id, message_count in counts:
+        membership = memberships_by_pair.get((group_id, member_id))
+        member = members_by_id.get(member_id)
+        group = groups_by_id.get(group_id)
+        if membership is None or member is None or group is None:
+            continue
+
+        dismissal = dismissals.get(str(membership.id))
+        if dismissal is not None:
+            snapshot_count = (dismissal.metric_snapshot or {}).get("messageCount")
+            if snapshot_count is None or message_count <= snapshot_count:
+                continue  # not worse than when dismissed — stay suppressed
+
+        results.append(
+            MessageBurst(
+                group_membership_id=membership.id,
+                group_id=group.id,
+                group_name=group.name,
+                member_id=member.id,
+                member_display_name=member.display_name,
+                member_avatar_url=member.avatar_url,
+                message_count=message_count,
+                window_minutes=window_minutes,
+            )
+        )
+
+    return sorted(results, key=lambda r: r.message_count, reverse=True)
+
+
+def get_duplicate_content_groups(db: Session, community: Community) -> list[DuplicateContentGroup]:
+    """A member repeating the exact same text within `DUPLICATE_CONTENT_WINDOW`
+    at least `DUPLICATE_CONTENT_MIN_COUNT` times — exact string match, no
+    normalization, deliberately cheap (see module docstring for why
+    cross-member/fuzzy matching is a separate, deferred feature).
+
+    A dismissed (group, member) pair is suppressed unless its current
+    highest `occurrence_count` has grown past the value it had at dismissal
+    time."""
+    dismissals = _get_dismissals(db, community.id, "duplicate_content")
+    groups = _get_groups_for_community(db, community.id)
+    if not groups:
+        return []
+    group_ids = [group.id for group in groups]
+
+    window_start = datetime.now(UTC) - DUPLICATE_CONTENT_WINDOW
+    rows = db.execute(
+        select(GroupMessage.group_id, GroupMessage.member_id, GroupMessage.content, func.count(GroupMessage.id))
+        .where(
+            GroupMessage.group_id.in_(group_ids),
+            GroupMessage.member_id.is_not(None),
+            GroupMessage.message_type == MessageType.text,
+            GroupMessage.sent_at >= window_start,
+            func.length(func.trim(GroupMessage.content)) >= DUPLICATE_CONTENT_MIN_LENGTH,
+        )
+        .group_by(GroupMessage.group_id, GroupMessage.member_id, GroupMessage.content)
+        .having(func.count(GroupMessage.id) >= DUPLICATE_CONTENT_MIN_COUNT)
+    ).all()
+    if not rows:
+        return []
+
+    hit_group_ids = {group_id for group_id, _member_id, _content, _count in rows}
+    hit_member_ids = {member_id for _group_id, member_id, _content, _count in rows}
+    memberships_by_pair = {
+        (m.group_id, m.member_id): m
+        for m in db.execute(
+            select(GroupMembership).where(
+                GroupMembership.group_id.in_(hit_group_ids), GroupMembership.member_id.in_(hit_member_ids)
+            )
+        ).scalars()
+    }
+    groups_by_id = {group.id: group for group in groups}
+    members_by_id = {m.id: m for m in db.execute(select(Member).where(Member.id.in_(hit_member_ids))).scalars()}
+
+    results = []
+    for group_id, member_id, content, occurrence_count in rows:
+        membership = memberships_by_pair.get((group_id, member_id))
+        member = members_by_id.get(member_id)
+        group = groups_by_id.get(group_id)
+        if membership is None or member is None or group is None:
+            continue
+
+        dismissal = dismissals.get(str(membership.id))
+        if dismissal is not None:
+            snapshot_count = (dismissal.metric_snapshot or {}).get("occurrenceCount")
+            if snapshot_count is None or occurrence_count <= snapshot_count:
+                continue  # not worse than when dismissed — stay suppressed
+
+        results.append(
+            DuplicateContentGroup(
+                group_membership_id=membership.id,
+                group_id=group.id,
+                group_name=group.name,
+                member_id=member.id,
+                member_display_name=member.display_name,
+                content_preview=(content or "")[:100],
+                occurrence_count=occurrence_count,
+            )
+        )
+
+    return sorted(results, key=lambda r: r.occurrence_count, reverse=True)
+
+
 def dismiss_moderation_item(
     db: Session,
     community: Community,
@@ -398,7 +598,7 @@ def dismiss_moderation_item(
         metric_snapshot = {"recentJoinCount": recent_join_count, "memberCount": len(joined_ats)}
         normalized_target_id = str(group.id)
 
-    else:  # capacity_attention
+    elif section == "capacity_attention":
         target_type = "group"
         group = db.execute(
             select(Group).where(Group.id == _parse_target_uuid(target_id), Group.community_id == community.id)
@@ -410,6 +610,51 @@ def dismiss_moderation_item(
             percent_full = round(group.member_count / group.member_limit * 1000) / 10
         metric_snapshot = {"percentFull": percent_full, "pendingRequestCount": group.pending_request_count}
         normalized_target_id = str(group.id)
+
+    elif section == "message_bursts":
+        target_type = "group_membership"
+        membership = db.execute(
+            select(GroupMembership)
+            .join(Group, Group.id == GroupMembership.group_id)
+            .where(GroupMembership.id == _parse_target_uuid(target_id), Group.community_id == community.id)
+        ).scalar_one_or_none()
+        if membership is None:
+            raise not_found("Group membership not found in this community.")
+        window_start = datetime.now(UTC) - MESSAGE_BURST_WINDOW
+        message_count = db.execute(
+            select(func.count(GroupMessage.id)).where(
+                GroupMessage.group_id == membership.group_id,
+                GroupMessage.member_id == membership.member_id,
+                GroupMessage.sent_at >= window_start,
+            )
+        ).scalar_one()
+        metric_snapshot = {"messageCount": message_count}
+        normalized_target_id = str(membership.id)
+
+    else:  # duplicate_content
+        target_type = "group_membership"
+        membership = db.execute(
+            select(GroupMembership)
+            .join(Group, Group.id == GroupMembership.group_id)
+            .where(GroupMembership.id == _parse_target_uuid(target_id), Group.community_id == community.id)
+        ).scalar_one_or_none()
+        if membership is None:
+            raise not_found("Group membership not found in this community.")
+        window_start = datetime.now(UTC) - DUPLICATE_CONTENT_WINDOW
+        top_occurrence_count = db.execute(
+            select(func.count(GroupMessage.id))
+            .where(
+                GroupMessage.group_id == membership.group_id,
+                GroupMessage.member_id == membership.member_id,
+                GroupMessage.message_type == MessageType.text,
+                GroupMessage.sent_at >= window_start,
+            )
+            .group_by(GroupMessage.content)
+            .order_by(func.count(GroupMessage.id).desc())
+            .limit(1)
+        ).scalar()
+        metric_snapshot = {"occurrenceCount": top_occurrence_count or 0}
+        normalized_target_id = str(membership.id)
 
     existing = db.execute(
         select(ModerationDismissal).where(
@@ -454,7 +699,7 @@ def dismiss_moderation_item(
 
 
 def get_moderation_queue(db: Session, community: Community, provider: WhatsAppProvider) -> ModerationQueueData:
-    """The full four-section moderation queue for one community, or an
+    """The full six-section moderation queue for one community, or an
     all-empty result if the connected WhatsApp account doesn't administer
     this community (mirrors `communities/router.py`'s `list_communities`
     filtering exactly — see module docstring)."""
@@ -465,6 +710,8 @@ def get_moderation_queue(db: Session, community: Community, provider: WhatsAppPr
             never_active_members=[],
             join_bursts=[],
             capacity_attention=[],
+            message_bursts=[],
+            duplicate_content=[],
         )
 
     return ModerationQueueData(
@@ -472,4 +719,6 @@ def get_moderation_queue(db: Session, community: Community, provider: WhatsAppPr
         never_active_members=get_never_active_members(db, community),
         join_bursts=get_join_burst_groups(db, community),
         capacity_attention=get_capacity_attention_groups(db, community),
+        message_bursts=get_message_bursts(db, community),
+        duplicate_content=get_duplicate_content_groups(db, community),
     )

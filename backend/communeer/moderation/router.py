@@ -5,12 +5,16 @@ from sqlalchemy.orm import Session
 
 from communeer.communities.router import get_community_or_404
 from communeer.deps import get_current_user, get_db, get_provider, require_role
+from communeer.groups.schemas import GroupRequestOut
+from communeer.groups.service import list_group_pending_requests
 from communeer.models import User, UserRole
 from communeer.moderation.schemas import (
     AdminCoverageGapOut,
     CapacityAttentionOut,
     DismissModerationItemIn,
+    DuplicateContentOut,
     JoinBurstOut,
+    MessageBurstOut,
     ModerationQueueOut,
     NeverActiveMemberOut,
 )
@@ -67,8 +71,48 @@ def get_moderation_queue_route(
                 pending_request_count=g.pending_request_count,
                 percent_full=g.percent_full,
                 reason=g.reason,
+                # Only fetched for groups that actually have pending
+                # requests — `list_group_pending_requests` is one query per
+                # such group, but a community only has a handful of these at
+                # a time (this is the moderation queue, not a bulk list).
+                pending_requests=[
+                    GroupRequestOut(
+                        member_id=member.id,
+                        wa_id=member.wa_id,
+                        display_name=member.display_name,
+                        requested_at=membership.joined_at,
+                    )
+                    for membership, member in list_group_pending_requests(db, g.group_id)
+                ]
+                if g.reason in ("requests", "both")
+                else [],
             )
             for g in queue.capacity_attention
+        ],
+        message_bursts=[
+            MessageBurstOut(
+                group_membership_id=burst.group_membership_id,
+                group_id=burst.group_id,
+                group_name=burst.group_name,
+                member_id=burst.member_id,
+                member_display_name=burst.member_display_name,
+                member_avatar_url=burst.member_avatar_url,
+                message_count=burst.message_count,
+                window_minutes=burst.window_minutes,
+            )
+            for burst in queue.message_bursts
+        ],
+        duplicate_content=[
+            DuplicateContentOut(
+                group_membership_id=dup.group_membership_id,
+                group_id=dup.group_id,
+                group_name=dup.group_name,
+                member_id=dup.member_id,
+                member_display_name=dup.member_display_name,
+                content_preview=dup.content_preview,
+                occurrence_count=dup.occurrence_count,
+            )
+            for dup in queue.duplicate_content
         ],
     )
 

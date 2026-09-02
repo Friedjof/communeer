@@ -1,6 +1,6 @@
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import event, select
 
@@ -10,23 +10,30 @@ from communeer.models import (
     Community,
     Group,
     GroupMembership,
+    GroupMessage,
     MembershipStatus,
+    MessageType,
     ModerationDismissal,
 )
 from communeer.moderation.service import (
     CAPACITY_ATTENTION_THRESHOLD,
+    DUPLICATE_CONTENT_MIN_COUNT,
     JOIN_BURST_MIN_ABSOLUTE,
     JOIN_BURST_MIN_FRACTION,
     JOIN_BURST_WINDOW,
+    MESSAGE_BURST_MIN_COUNT,
     dismiss_moderation_item,
     get_admin_coverage_gaps,
     get_capacity_attention_groups,
+    get_duplicate_content_groups,
     get_join_burst_groups,
+    get_message_bursts,
     get_moderation_queue,
     get_never_active_members,
 )
 from communeer.providers.whatsapp.mock import MockWhatsAppProvider
 from communeer.sync.service import sync_community
+from tests.conftest import login_as_admin as _login
 
 UNITY_WA_ID = "120363010000000001@g.us"
 RIVERSIDE_WA_ID = "120363020000000001@g.us"
@@ -304,6 +311,156 @@ def test_capacity_attention_excludes_groups_with_no_limit_and_no_pending(db_sess
 
 
 # ---------------------------------------------------------------------------
+# message_bursts / duplicate_content
+# ---------------------------------------------------------------------------
+
+
+def _first_member_membership(db_session, community: Community) -> GroupMembership:
+    return db_session.execute(
+        select(GroupMembership)
+        .join(Group, Group.id == GroupMembership.group_id)
+        .where(Group.community_id == community.id, GroupMembership.status == MembershipStatus.member)
+    ).scalars().first()
+
+
+def _insert_group_messages(
+    db_session,
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    count: int,
+    *,
+    content: str = "hello there, this is a real message",
+    minutes_ago: float = 1,
+    message_type: MessageType = MessageType.text,
+) -> None:
+    now = datetime.now(UTC)
+    for i in range(count):
+        db_session.add(
+            GroupMessage(
+                group_id=group_id,
+                member_id=member_id,
+                wa_message_id=f"test-msg-{uuid.uuid4().hex}",
+                message_type=message_type,
+                content=content,
+                sent_at=now - timedelta(minutes=minutes_ago, seconds=i),
+            )
+        )
+    db_session.commit()
+
+
+def test_message_bursts_flags_at_threshold_and_not_below(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+
+    _insert_group_messages(db_session, membership.group_id, membership.member_id, MESSAGE_BURST_MIN_COUNT - 1)
+    assert get_message_bursts(db_session, community) == []
+
+    _insert_group_messages(db_session, membership.group_id, membership.member_id, 1)
+    bursts = get_message_bursts(db_session, community)
+    flagged = next(b for b in bursts if b.group_membership_id == membership.id)
+    assert flagged.message_count == MESSAGE_BURST_MIN_COUNT
+    assert flagged.group_id == membership.group_id
+    assert flagged.member_id == membership.member_id
+
+
+def test_message_bursts_ignores_messages_outside_the_window(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+
+    _insert_group_messages(
+        db_session, membership.group_id, membership.member_id, MESSAGE_BURST_MIN_COUNT, minutes_ago=60
+    )
+    assert get_message_bursts(db_session, community) == []
+
+
+def test_dismiss_message_burst_reappears_when_worse(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+    _insert_group_messages(db_session, membership.group_id, membership.member_id, MESSAGE_BURST_MIN_COUNT)
+
+    dismiss_moderation_item(
+        db_session,
+        community,
+        MockWhatsAppProvider(),
+        "message_bursts",
+        str(membership.id),
+        reason=None,
+        actor_user_id=None,
+    )
+    assert get_message_bursts(db_session, community) == []
+
+    _insert_group_messages(db_session, membership.group_id, membership.member_id, 1)
+    bursts = get_message_bursts(db_session, community)
+    assert any(b.group_membership_id == membership.id for b in bursts)
+
+
+def test_duplicate_content_flags_repeated_exact_text(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+    text = "please check out my link, this one right here"
+
+    _insert_group_messages(
+        db_session, membership.group_id, membership.member_id, DUPLICATE_CONTENT_MIN_COUNT - 1, content=text
+    )
+    assert get_duplicate_content_groups(db_session, community) == []
+
+    _insert_group_messages(db_session, membership.group_id, membership.member_id, 1, content=text)
+    duplicates = get_duplicate_content_groups(db_session, community)
+    flagged = next(d for d in duplicates if d.group_membership_id == membership.id)
+    assert flagged.occurrence_count == DUPLICATE_CONTENT_MIN_COUNT
+    assert flagged.content_preview == text
+
+
+def test_duplicate_content_ignores_short_messages(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+
+    _insert_group_messages(
+        db_session, membership.group_id, membership.member_id, DUPLICATE_CONTENT_MIN_COUNT + 2, content="ok"
+    )
+    assert get_duplicate_content_groups(db_session, community) == []
+
+
+def test_duplicate_content_ignores_media_messages(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+
+    _insert_group_messages(
+        db_session,
+        membership.group_id,
+        membership.member_id,
+        DUPLICATE_CONTENT_MIN_COUNT + 1,
+        content="[media message]",
+        message_type=MessageType.media,
+    )
+    assert get_duplicate_content_groups(db_session, community) == []
+
+
+def test_dismiss_duplicate_content_reappears_when_worse(db_session):
+    community = _sync_unity(db_session)
+    membership = _first_member_membership(db_session, community)
+    text = "reused promo text that is long enough"
+    _insert_group_messages(
+        db_session, membership.group_id, membership.member_id, DUPLICATE_CONTENT_MIN_COUNT, content=text
+    )
+
+    dismiss_moderation_item(
+        db_session,
+        community,
+        MockWhatsAppProvider(),
+        "duplicate_content",
+        str(membership.id),
+        reason=None,
+        actor_user_id=None,
+    )
+    assert get_duplicate_content_groups(db_session, community) == []
+
+    _insert_group_messages(db_session, membership.group_id, membership.member_id, 1, content=text)
+    duplicates = get_duplicate_content_groups(db_session, community)
+    assert any(d.group_membership_id == membership.id for d in duplicates)
+
+
+# ---------------------------------------------------------------------------
 # dismiss_moderation_item
 # ---------------------------------------------------------------------------
 
@@ -492,9 +649,6 @@ def test_moderation_queue_returns_data_when_community_is_in_admin_set(db_session
 # ---------------------------------------------------------------------------
 
 
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
 
 
 def test_moderation_route_requires_auth(client):
@@ -519,7 +673,14 @@ def test_moderation_queue_endpoint_end_to_end(client):
     response = client.get(f"/api/v1/communities/{unity_alpha['id']}/moderation/queue")
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"adminCoverageGaps", "neverActiveMembers", "joinBursts", "capacityAttention"}
+    assert set(body.keys()) == {
+        "adminCoverageGaps",
+        "neverActiveMembers",
+        "joinBursts",
+        "capacityAttention",
+        "messageBursts",
+        "duplicateContent",
+    }
 
     assert len(body["adminCoverageGaps"]) > 0
     for row in body["adminCoverageGaps"]:
@@ -537,6 +698,20 @@ def test_moderation_queue_endpoint_end_to_end(client):
     marketplace = next(g for g in groups if g["name"] == "Marketplace")
     marketplace_row = next(r for r in body["capacityAttention"] if r["groupName"] == "Marketplace")
     assert marketplace_row["pendingRequestCount"] == marketplace["pendingRequestCount"]
+    if marketplace_row["reason"] in ("requests", "both"):
+        assert len(marketplace_row["pendingRequests"]) == marketplace_row["pendingRequestCount"]
+        for pending in marketplace_row["pendingRequests"]:
+            assert {"memberId", "waId", "displayName", "requestedAt"} <= set(pending.keys())
+    # A row whose `reason` is pure "capacity" carries no requests.
+    for row in body["capacityAttention"]:
+        if row["reason"] == "capacity":
+            assert row["pendingRequests"] == []
+
+    # message_bursts/duplicate_content: no message history has been ingested
+    # by this test (only the webhook path writes `GroupMessage` rows), so
+    # both must be empty rather than erroring.
+    assert body["messageBursts"] == []
+    assert body["duplicateContent"] == []
 
     # join bursts: real wall clock is far past the mock fixture's fixed `_NOW`
     # anchor, so no group should show a recent-join spike against live data.

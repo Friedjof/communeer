@@ -16,3 +16,15 @@ export function updateUser(userId: string, input: UpdateUserInput): Promise<Mana
 export function resetUserPassword(userId: string, password: string): Promise<void> {
   return apiPost<void>(`/users/${userId}/reset-password`, { password })
 }
+
+export function resetUserTotp(userId: string): Promise<void> {
+  return apiPost<void>(`/users/${userId}/reset-2fa`)
+}
+
+export function resendClaimCode(userId: string): Promise<void> {
+  return apiPost<void>(`/users/${userId}/resend-claim`)
+}
+
+export function approveGroupAdmin(userId: string): Promise<void> {
+  return apiPost<void>(`/users/${userId}/approve`)
+}

@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
-import { LogOut, Menu, MessageCircle, Monitor, Moon, Sun } from 'lucide-react'
+import { LogOut, Menu, Monitor, Moon, Sun } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,9 +46,7 @@ export function Topbar({ communityId, onOpenMobileNav }: TopbarProps) {
       </Button>
 
       <a href="/" className="flex items-center gap-2 font-semibold">
-        <span className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <MessageCircle className="size-4" />
-        </span>
+        <img src="/logo.png" alt="" className="size-7" />
         <span className="hidden sm:inline">Communeer</span>
       </a>
 

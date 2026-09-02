@@ -1,5 +1,7 @@
-import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { queryOptions, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as groupsApi from './api'
+
+const GROUP_MESSAGES_PAGE_SIZE = 50
 
 // Reads Communeer's own local DB only (never WhatsApp/WPPConnect directly) —
 // short polling here keeps the group member list reflecting webhook-driven
@@ -13,6 +15,8 @@ export const groupKeys = {
   members: (groupId: string) => ['groups', groupId, 'members'] as const,
   requests: (groupId: string) => ['groups', groupId, 'requests'] as const,
   inviteLink: (groupId: string) => ['groups', groupId, 'invite-link'] as const,
+  messages: (groupId: string, filters: { search?: string; memberId?: string }) =>
+    ['groups', groupId, 'messages', filters] as const,
 }
 
 export function groupQueryOptions(groupId: string, advanced = false) {
@@ -40,6 +44,24 @@ export function useGroupRequests(groupId: string) {
   return useQuery({
     queryKey: groupKeys.requests(groupId),
     queryFn: () => groupsApi.getGroupRequests(groupId),
+    enabled: Boolean(groupId),
+  })
+}
+
+/** A group's message log, paginated backwards from "now" via the `before`
+ * cursor (the oldest already-loaded message's `sentAt`) — never offset-based,
+ * since an offset would shift under the caller as new messages keep
+ * arriving on this live-appending table. No live polling: a log a human is
+ * scrolling through doesn't need the 25s badge-refresh cadence the rest of
+ * this file uses. */
+export function useGroupMessages(groupId: string, filters: { search?: string; memberId?: string }) {
+  return useInfiniteQuery({
+    queryKey: groupKeys.messages(groupId, filters),
+    queryFn: ({ pageParam }: { pageParam?: string }) =>
+      groupsApi.getGroupMessages(groupId, { ...filters, limit: GROUP_MESSAGES_PAGE_SIZE, before: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.length === GROUP_MESSAGES_PAGE_SIZE ? lastPage.at(-1)?.sentAt : undefined,
     enabled: Boolean(groupId),
   })
 }

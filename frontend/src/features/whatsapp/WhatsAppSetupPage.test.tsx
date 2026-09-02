@@ -1,16 +1,25 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionUser } from '@/features/auth/types'
 import { WhatsAppSetupPage } from './WhatsAppSetupPage'
 
-const { useSessionMock, useWhatsAppStatusMock, useConnectWhatsAppMock, useDiscoverAndSyncMock, useNavigateMock } =
-  vi.hoisted(() => ({
-    useSessionMock: vi.fn(),
-    useWhatsAppStatusMock: vi.fn(),
-    useConnectWhatsAppMock: vi.fn(),
-    useDiscoverAndSyncMock: vi.fn(),
-    useNavigateMock: vi.fn(),
-  }))
+const {
+  useSessionMock,
+  useWhatsAppStatusMock,
+  useConnectWhatsAppMock,
+  useDiscoverAndSyncMock,
+  useNavigateMock,
+  useQueryClientMock,
+  invalidateQueriesMock,
+} = vi.hoisted(() => ({
+  useSessionMock: vi.fn(),
+  useWhatsAppStatusMock: vi.fn(),
+  useConnectWhatsAppMock: vi.fn(),
+  useDiscoverAndSyncMock: vi.fn(),
+  useNavigateMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
+  invalidateQueriesMock: vi.fn(),
+}))
 
 vi.mock('@/features/auth/queries', () => ({
   useSession: useSessionMock,
@@ -20,10 +29,19 @@ vi.mock('./queries', () => ({
   useWhatsAppStatus: useWhatsAppStatusMock,
   useConnectWhatsApp: useConnectWhatsAppMock,
   useDiscoverAndSync: useDiscoverAndSyncMock,
+  whatsappKeys: { status: ['whatsapp', 'status'] },
+}))
+
+vi.mock('@/features/communities/queries', () => ({
+  communityKeys: { all: ['communities'] },
 }))
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: useNavigateMock,
+}))
+
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: useQueryClientMock,
 }))
 
 function mockSession(role: SessionUser['role']) {
@@ -33,9 +51,10 @@ function mockSession(role: SessionUser['role']) {
 function setup(role: SessionUser['role']) {
   mockSession(role)
   useNavigateMock.mockReturnValue(vi.fn())
+  useQueryClientMock.mockReturnValue({ invalidateQueries: invalidateQueriesMock })
   useWhatsAppStatusMock.mockReturnValue({
     isPending: false,
-    data: { state: 'disconnected', qrCodeDataUrl: null, detail: null },
+    data: { state: 'disconnected', qrCodeDataUrl: null, detail: null, discoveryInProgress: false },
   })
   useConnectWhatsAppMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
   useDiscoverAndSyncMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
@@ -61,9 +80,10 @@ describe('WhatsAppSetupPage', () => {
   it('disables the Discover communities button for a viewer once connected', () => {
     mockSession('viewer')
     useNavigateMock.mockReturnValue(vi.fn())
+    useQueryClientMock.mockReturnValue({ invalidateQueries: invalidateQueriesMock })
     useWhatsAppStatusMock.mockReturnValue({
       isPending: false,
-      data: { state: 'connected', qrCodeDataUrl: null, detail: null },
+      data: { state: 'connected', qrCodeDataUrl: null, detail: null, discoveryInProgress: false },
     })
     useConnectWhatsAppMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
     useDiscoverAndSyncMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
@@ -76,9 +96,10 @@ describe('WhatsAppSetupPage', () => {
   it('enables the Discover communities button for an owner once connected', () => {
     mockSession('owner')
     useNavigateMock.mockReturnValue(vi.fn())
+    useQueryClientMock.mockReturnValue({ invalidateQueries: invalidateQueriesMock })
     useWhatsAppStatusMock.mockReturnValue({
       isPending: false,
-      data: { state: 'connected', qrCodeDataUrl: null, detail: null },
+      data: { state: 'connected', qrCodeDataUrl: null, detail: null, discoveryInProgress: false },
     })
     useConnectWhatsAppMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
     useDiscoverAndSyncMock.mockReturnValue({ mutate: vi.fn(), isPending: false, error: null })
@@ -86,5 +107,31 @@ describe('WhatsAppSetupPage', () => {
     render(<WhatsAppSetupPage />)
 
     expect(screen.getByRole('button', { name: /discover communities/i })).toBeEnabled()
+  })
+
+  it('invalidates the communities cache when a background discovery finishes', async () => {
+    // Simulates a page that reloaded mid-discovery: this instance never
+    // called `useDiscoverAndSync` itself, so it only learns discovery
+    // finished via the polled `discoveryInProgress` flag flipping — and
+    // must still invalidate the communities cache before navigating away,
+    // the same way `useDiscoverAndSync`'s own `onSuccess` does.
+    setup('owner')
+    useWhatsAppStatusMock.mockReturnValue({
+      isPending: false,
+      data: { state: 'connected', qrCodeDataUrl: null, detail: null, discoveryInProgress: true },
+    })
+
+    const { rerender } = render(<WhatsAppSetupPage />)
+    expect(invalidateQueriesMock).not.toHaveBeenCalled()
+
+    useWhatsAppStatusMock.mockReturnValue({
+      isPending: false,
+      data: { state: 'connected', qrCodeDataUrl: null, detail: null, discoveryInProgress: false },
+    })
+    rerender(<WhatsAppSetupPage />)
+
+    await waitFor(() => {
+      expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['communities'] })
+    })
   })
 })

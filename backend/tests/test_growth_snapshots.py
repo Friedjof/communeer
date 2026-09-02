@@ -17,6 +17,7 @@ from communeer.models import (
 )
 from communeer.providers.whatsapp.mock import MockWhatsAppProvider
 from communeer.sync.service import sync_community
+from tests.conftest import login_as_admin as _login
 
 UNITY_WA_ID = "120363010000000001@g.us"
 
@@ -217,9 +218,6 @@ def test_group_history_for_community_query_count_does_not_scale_with_group_count
     assert counter["n"] < group_count
 
 
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
 
 
 def test_community_history_endpoint_requires_auth(client):

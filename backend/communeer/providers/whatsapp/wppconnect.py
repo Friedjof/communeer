@@ -37,7 +37,7 @@ communities", which would be indistinguishable from a real empty account).
 `get_admin_community_wa_ids` below): the connected account's own identity,
 in the namespace `group-admins` uses to list a group's admins, is **not**
 what `status-session`/`host-device`/`get-phone-number` report (those give
-the real phone-number JID, e.g. `4917645790258@c.us`). Confirmed live:
+the real phone-number JID, e.g. `491701234567@c.us`). Confirmed live:
 modern WhatsApp accounts are addressed within group rosters via an opaque
 `@lid` id instead (e.g. `236794549432473@lid`), and the two never match by
 naive string comparison — tested against an account that IS a real admin
@@ -653,7 +653,7 @@ class WppconnectProvider(WhatsAppProvider):
     # Empirically verified against a live, authenticated session (see the
     # plan this was built from): `status-session`, `host-device`, and
     # `get-phone-number` all report the connected account's real
-    # phone-number JID (e.g. `4917645790258@c.us`) — but `group-members` /
+    # phone-number JID (e.g. `491701234567@c.us`) — but `group-members` /
     # `group-admins` address every participant, *including the connected
     # account itself*, via WhatsApp's newer opaque `@lid` identifier
     # instead (e.g. `236794549432473@lid`). These are two different ids for
@@ -724,7 +724,21 @@ class WppconnectProvider(WhatsAppProvider):
         page load. This instead does one `list-chats` call plus one
         `group-admins` call per community's *announcement group only*
         (skipping every other subgroup), plus whatever `group-members`
-        calls `_find_own_wa_id` needs (usually just one)."""
+        calls `_find_own_wa_id` needs (usually just one).
+
+        A `None` return means "can't determine at all, don't filter" (see
+        below) — the same fail-open principle also applies *per community*:
+        once `root_wa_id` itself is known, failing to pin down its
+        announcement group or admin roster (a missing/unmatched
+        announcement chat, or a `group-admins` call that errors) is
+        "can't tell whether this one is administered by the connected
+        account," not "confirmed not administered" — those are as different
+        as a `None` return is from an empty set at the top level, so this
+        community is *included* rather than silently dropped. Getting this
+        wrong made a genuinely-administered community with a flaky
+        `group-admins` call (or one WPPConnect just hadn't finished
+        indexing an announcement group for yet) permanently invisible in
+        the dashboard's community list with no error surfaced anywhere."""
         try:
             self._require_connected()
             metas = self._list_chat_metas()
@@ -741,6 +755,7 @@ class WppconnectProvider(WhatsAppProvider):
                 continue
             root_wa_id = self._wa_id_of(chat, meta)
             if not root_wa_id:
+                # No id at all for this chat — nothing to add either way.
                 continue
 
             announcement = next(
@@ -753,10 +768,12 @@ class WppconnectProvider(WhatsAppProvider):
                 None,
             )
             if announcement is None:
+                admin_wa_ids.add(root_wa_id)
                 continue
             ann_chat, ann_meta = announcement
             ann_wa_id = self._wa_id_of(ann_chat, ann_meta)
             if not ann_wa_id:
+                admin_wa_ids.add(root_wa_id)
                 continue
 
             try:
@@ -765,6 +782,7 @@ class WppconnectProvider(WhatsAppProvider):
                 )
                 resp.raise_for_status()
             except httpx.HTTPError:
+                admin_wa_ids.add(root_wa_id)
                 continue
             raw_admins = _flatten_participant_list(_unwrap_list_response(resp.json()))
             admin_ids = {_participant_id(a) for a in raw_admins if _participant_id(a)}

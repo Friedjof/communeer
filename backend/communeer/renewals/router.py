@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from communeer.deps import get_current_user, get_db, get_provider, require_role
+from communeer.authz import ensure_group_access
+from communeer.deps import (
+    get_current_user,
+    get_db,
+    get_provider,
+    require_group_access,
+    require_role,
+)
 from communeer.errors import not_found
 from communeer.groups.router import get_group_or_404
 from communeer.models import User, UserRole
@@ -74,6 +81,21 @@ def _confirmation_out(confirmation: RenewalConfirmation, campaign: RenewalCampai
     )
 
 
+def _check_campaign_group_access(
+    campaign_id: uuid.UUID, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> User:
+    """`campaign_id`-keyed routes carry no `group_id` in their path (unlike
+    `groups/*`), so `require_group_access()` can't apply directly here — this
+    loads the campaign first and checks `campaign.group_id` instead. The
+    resulting extra `get_campaign_or_404` call (the route handler itself
+    calls it again) is a cheap, accepted redundancy — same tolerance for
+    re-deriving already-fetched data this codebase already has elsewhere
+    (e.g. `_group_summary`)."""
+    campaign = get_campaign_or_404(db, campaign_id)
+    ensure_group_access(db, user, campaign.group_id)
+    return user
+
+
 def _get_confirmation_or_404(db: Session, campaign: RenewalCampaign, member_id: uuid.UUID) -> RenewalConfirmation:
     confirmation = db.execute(
         select(RenewalConfirmation).where(
@@ -89,6 +111,7 @@ def _get_confirmation_or_404(db: Session, campaign: RenewalCampaign, member_id: 
 @router.get(
     "/groups/{group_id}/renewals/suggestions",
     response_model=list[RenewalSuggestionOut],
+    dependencies=[Depends(require_group_access())],
 )
 def get_renewal_suggestions_route(group_id: uuid.UUID, db: Session = Depends(get_db)) -> list[RenewalSuggestionOut]:
     group = get_group_or_404(db, group_id)
@@ -113,7 +136,10 @@ def get_renewal_suggestions_route(group_id: uuid.UUID, db: Session = Depends(get
 @router.post(
     "/groups/{group_id}/renewals",
     response_model=RenewalCampaignSummaryOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(require_group_access()),
+    ],
 )
 def create_renewal_campaign_route(
     group_id: uuid.UUID,
@@ -134,7 +160,11 @@ def create_renewal_campaign_route(
     return _campaign_summary_out(db, campaign)
 
 
-@router.get("/groups/{group_id}/renewals", response_model=list[RenewalCampaignSummaryOut])
+@router.get(
+    "/groups/{group_id}/renewals",
+    response_model=list[RenewalCampaignSummaryOut],
+    dependencies=[Depends(require_group_access())],
+)
 def list_renewal_campaigns_route(group_id: uuid.UUID, db: Session = Depends(get_db)) -> list[RenewalCampaignSummaryOut]:
     group = get_group_or_404(db, group_id)
     campaigns = list_campaigns_for_group(db, group.id)
@@ -142,7 +172,11 @@ def list_renewal_campaigns_route(group_id: uuid.UUID, db: Session = Depends(get_
     return [_campaign_summary_out_from_counts(c, summaries[c.id]) for c in campaigns]
 
 
-@router.get("/renewals/{campaign_id}", response_model=RenewalCampaignDetailOut)
+@router.get(
+    "/renewals/{campaign_id}",
+    response_model=RenewalCampaignDetailOut,
+    dependencies=[Depends(_check_campaign_group_access)],
+)
 def get_renewal_campaign_route(campaign_id: uuid.UUID, db: Session = Depends(get_db)) -> RenewalCampaignDetailOut:
     campaign = get_campaign_or_404(db, campaign_id)
     summary = _campaign_summary_out(db, campaign)
@@ -156,7 +190,10 @@ def get_renewal_campaign_route(campaign_id: uuid.UUID, db: Session = Depends(get
 @router.post(
     "/renewals/{campaign_id}/confirmations/{member_id}/confirm",
     response_model=RenewalConfirmationOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def confirm_renewal_route(
     campaign_id: uuid.UUID,
@@ -173,7 +210,10 @@ def confirm_renewal_route(
 @router.post(
     "/renewals/{campaign_id}/confirmations/{member_id}/remove",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def remove_from_campaign_route(
     campaign_id: uuid.UUID,
@@ -189,7 +229,10 @@ def remove_from_campaign_route(
 @router.post(
     "/renewals/{campaign_id}/confirmations/{member_id}/send-reminder",
     response_model=RenewalConfirmationOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def send_renewal_reminder_route(
     campaign_id: uuid.UUID,
@@ -207,12 +250,16 @@ def send_renewal_reminder_route(
 @router.post(
     "/renewals/{campaign_id}/check-reactions",
     response_model=RenewalCampaignDetailOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def check_renewal_reactions_route(
     campaign_id: uuid.UUID,
     db: Session = Depends(get_db),
     provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(get_current_user),
 ) -> RenewalCampaignDetailOut:
     """Pull-based check: asks WhatsApp directly what reaction (if any) sits
     on each pending member's reminder right now, applying the same
@@ -220,7 +267,7 @@ def check_renewal_reactions_route(
     want to wait on (or trust) the webhook. Returns the full, fresh campaign
     detail so the frontend can render the result in one round trip."""
     campaign = get_campaign_or_404(db, campaign_id)
-    check_renewal_reactions(db, provider, campaign)
+    check_renewal_reactions(db, provider, campaign, actor_user_id=user.id)
     summary = _campaign_summary_out(db, campaign)
     confirmations = get_campaign_confirmations(db, campaign)
     return RenewalCampaignDetailOut(
@@ -232,7 +279,10 @@ def check_renewal_reactions_route(
 @router.post(
     "/renewals/{campaign_id}/process-removals",
     response_model=RenewalCampaignDetailOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def process_due_removals_route(
     campaign_id: uuid.UUID,
@@ -255,7 +305,11 @@ def process_due_removals_route(
     )
 
 
-@router.get("/renewals/{campaign_id}/non-responders", response_model=list[RenewalConfirmationOut])
+@router.get(
+    "/renewals/{campaign_id}/non-responders",
+    response_model=list[RenewalConfirmationOut],
+    dependencies=[Depends(_check_campaign_group_access)],
+)
 def get_non_responders_route(campaign_id: uuid.UUID, db: Session = Depends(get_db)) -> list[RenewalConfirmationOut]:
     campaign = get_campaign_or_404(db, campaign_id)
     return [_confirmation_out(c, campaign) for c in get_non_responders(db, campaign)]
@@ -264,7 +318,10 @@ def get_non_responders_route(campaign_id: uuid.UUID, db: Session = Depends(get_d
 @router.post(
     "/renewals/{campaign_id}/archive",
     response_model=RenewalCampaignSummaryOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def archive_campaign_route(
     campaign_id: uuid.UUID,
@@ -279,7 +336,10 @@ def archive_campaign_route(
 @router.post(
     "/renewals/{campaign_id}/unarchive",
     response_model=RenewalCampaignSummaryOut,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def unarchive_campaign_route(
     campaign_id: uuid.UUID,
@@ -294,7 +354,10 @@ def unarchive_campaign_route(
 @router.delete(
     "/renewals/{campaign_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(_check_campaign_group_access),
+    ],
 )
 def delete_campaign_route(
     campaign_id: uuid.UUID,

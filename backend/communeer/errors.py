@@ -50,6 +50,14 @@ def conflict(message: str) -> ApiError:
     return ApiError(status.HTTP_409_CONFLICT, "conflict", message)
 
 
+def too_many_requests(message: str) -> ApiError:
+    return ApiError(status.HTTP_429_TOO_MANY_REQUESTS, "too_many_requests", message)
+
+
+def totp_setup_required(message: str = "Two-factor authentication setup is required for your role.") -> ApiError:
+    return ApiError(status.HTTP_428_PRECONDITION_REQUIRED, "totp_setup_required", message)
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:

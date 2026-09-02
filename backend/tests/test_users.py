@@ -1,18 +1,61 @@
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
 from communeer.auth.security import hash_password, verify_password
 from communeer.errors import ApiError
-from communeer.models import User, UserRole
+from communeer.models import Member, User, UserRole
+from communeer.models.base import new_uuid
+from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
+from communeer.providers.whatsapp.mock import MockWhatsAppProvider
 from communeer.users.service import (
+    approve_group_admin,
     create_user,
     list_users,
+    resend_claim_code,
     reset_user_password,
     update_user,
 )
+from tests.conftest import login_as_admin as _login
 
 OWNER_ID = uuid.uuid4()
+
+
+def _seed_unclaimed_group_admin(
+    db_session, *, username: str = "unclaimed-admin", is_approved: bool = False
+) -> User:
+    """`is_approved=False` by default — matches what real auto-provisioning
+    actually produces (see `auth/provisioning.py`'s module docstring); pass
+    `is_approved=True` for tests exercising what happens *after* approval
+    (e.g. `resend_claim_code`)."""
+    member = Member(
+        id=new_uuid(),
+        wa_id=f"4915{uuid.uuid4().int % 10**9}@c.us",
+        display_name="Unclaimed Admin",
+        first_seen_at=datetime.now(UTC),
+    )
+    db_session.add(member)
+    db_session.flush()
+
+    user = User(
+        username=username,
+        password_hash=hash_password(uuid.uuid4().hex),
+        role=UserRole.group_admin,
+        is_active=True,
+        is_claimed=False,
+        is_approved=is_approved,
+        member_id=member.id,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+class _FailingSendProvider(MockWhatsAppProvider):
+    def send_text_message(self, member_wa_id: str, message: str) -> str | None:
+        raise WhatsAppProviderUnavailableError("boom")
 
 
 def _seed_owner(db_session, *, username: str = "owner1") -> User:
@@ -140,16 +183,201 @@ def test_reset_user_password_updates_hash_and_writes_audit_event(db_session):
 
 
 # ---------------------------------------------------------------------------
+# group_admin: only ever auto-provisioned, never assignable by hand
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_rejects_group_admin_role(db_session):
+    owner = _seed_owner(db_session)
+
+    try:
+        create_user(db_session, username="wannabe", password="password123", role=UserRole.group_admin, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+    assert db_session.execute(select(User).where(User.username == "wannabe")).scalar_one_or_none() is None
+
+
+def test_update_user_rejects_assigning_group_admin_role(db_session):
+    owner = _seed_owner(db_session)
+    target = create_user(db_session, username="target2", password="password123", role=UserRole.viewer, actor_user_id=owner.id)
+
+    try:
+        update_user(db_session, target.id, role=UserRole.group_admin, is_active=None, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+    db_session.refresh(target)
+    assert target.role == UserRole.viewer
+
+
+def test_update_user_allows_moving_a_group_admin_away_from_the_role(db_session):
+    """The one direction that's blocked is *assigning* `group_admin` by
+    hand — promoting an already-claimed `group_admin` to a full `admin` (or
+    any other role) is a normal, allowed role change."""
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session)
+
+    updated = update_user(db_session, provisioned.id, role=UserRole.admin, is_active=None, actor_user_id=owner.id)
+    assert updated.role == UserRole.admin
+
+
+# ---------------------------------------------------------------------------
+# resend_claim_code
+# ---------------------------------------------------------------------------
+
+
+def test_resend_claim_code_sends_and_writes_audit_event(db_session):
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session, is_approved=True)
+    provider = MockWhatsAppProvider()
+
+    resend_claim_code(db_session, provider, provisioned.id, actor_user_id=owner.id)
+
+    assert len(provider._sent_messages) == 1
+
+    from communeer.models import AuditEvent
+
+    events = db_session.execute(
+        select(AuditEvent).where(AuditEvent.action == "user.claim_code_resent", AuditEvent.target_id == str(provisioned.id))
+    ).scalars().all()
+    assert len(events) == 1
+
+
+def test_resend_claim_code_rejects_an_already_claimed_account(db_session):
+    owner = _seed_owner(db_session)
+    target = create_user(db_session, username="target3", password="password123", role=UserRole.viewer, actor_user_id=owner.id)
+
+    try:
+        resend_claim_code(db_session, MockWhatsAppProvider(), target.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+
+def test_resend_claim_code_rejects_an_account_with_no_member_link(db_session):
+    owner = _seed_owner(db_session)
+
+    try:
+        resend_claim_code(db_session, MockWhatsAppProvider(), owner.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+
+def test_resend_claim_code_rejects_an_unapproved_account(db_session):
+    """An owner must use `approve_group_admin` for a never-yet-approved
+    account — `resend_claim_code` is only for retrying after that."""
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session)  # is_approved=False by default
+
+    try:
+        resend_claim_code(db_session, MockWhatsAppProvider(), provisioned.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+
+def test_resend_claim_code_surfaces_a_503_on_provider_failure(db_session):
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session, is_approved=True)
+
+    try:
+        resend_claim_code(db_session, _FailingSendProvider(), provisioned.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# approve_group_admin
+# ---------------------------------------------------------------------------
+
+
+def test_approve_group_admin_sends_code_and_writes_audit_event(db_session):
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session)  # is_approved=False by default
+    provider = MockWhatsAppProvider()
+
+    approve_group_admin(db_session, provider, provisioned.id, actor_user_id=owner.id)
+
+    db_session.refresh(provisioned)
+    assert provisioned.is_approved is True
+    assert len(provider._sent_messages) == 1
+
+    from communeer.models import AuditEvent
+
+    events = db_session.execute(
+        select(AuditEvent).where(
+            AuditEvent.action == "user.group_admin_approved", AuditEvent.target_id == str(provisioned.id)
+        )
+    ).scalars().all()
+    assert len(events) == 1
+
+
+def test_approve_group_admin_rejects_an_already_approved_account(db_session):
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session, is_approved=True)
+
+    try:
+        approve_group_admin(db_session, MockWhatsAppProvider(), provisioned.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 409
+
+
+def test_approve_group_admin_rejects_an_already_claimed_account(db_session):
+    owner = _seed_owner(db_session)
+    target = create_user(db_session, username="target4", password="password123", role=UserRole.viewer, actor_user_id=owner.id)
+
+    try:
+        approve_group_admin(db_session, MockWhatsAppProvider(), target.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+
+def test_approve_group_admin_rejects_an_account_with_no_member_link(db_session):
+    owner = _seed_owner(db_session)
+
+    try:
+        approve_group_admin(db_session, MockWhatsAppProvider(), owner.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 400
+
+
+def test_approve_group_admin_persists_the_approval_even_if_the_send_fails(db_session):
+    """A provider hiccup on the very first send must not force the owner to
+    redo the approval decision — `is_approved` stays `True`, retryable via
+    `resend_claim_code`."""
+    owner = _seed_owner(db_session)
+    provisioned = _seed_unclaimed_group_admin(db_session)  # is_approved=False by default
+
+    try:
+        approve_group_admin(db_session, _FailingSendProvider(), provisioned.id, actor_user_id=owner.id)
+        raise AssertionError("expected ApiError")
+    except ApiError as exc:
+        assert exc.status_code == 503
+
+    db_session.refresh(provisioned)
+    assert provisioned.is_approved is True
+
+
+# ---------------------------------------------------------------------------
 # HTTP-level: owner-only gating
 # ---------------------------------------------------------------------------
 
 
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
+
+
+_PLAIN_ADMIN_TOTP_SECRET = "KRSXG5CTMVRXEZLU"
 
 
 def _seed_admin_role_user() -> None:
+    from communeer.auth.security import encrypt_totp_secret
     from communeer.db import SessionLocal
 
     db = SessionLocal()
@@ -163,6 +391,11 @@ def _seed_admin_role_user() -> None:
                 password_hash=hash_password("plain-admin-pw-123"),
                 role=UserRole.admin,
                 is_active=True,
+                # 2FA is mandatory for `admin`/`owner` (see `deps.get_current_user`)
+                # — pre-enabled here so this test exercises the *role* gate on
+                # `/users`, not the separate "set up 2FA first" gate.
+                totp_enabled=True,
+                totp_secret_encrypted=encrypt_totp_secret(_PLAIN_ADMIN_TOTP_SECRET),
             )
         )
         db.commit()
@@ -171,8 +404,16 @@ def _seed_admin_role_user() -> None:
 
 
 def test_users_route_requires_owner_role(client):
+    import pyotp
+
     _seed_admin_role_user()
-    client.post("/api/v1/auth/login", json={"username": "plain-admin", "password": "plain-admin-pw-123"})
+    login_response = client.post(
+        "/api/v1/auth/login", json={"username": "plain-admin", "password": "plain-admin-pw-123"}
+    )
+    assert login_response.json()["requiresTotp"] is True
+    code = pyotp.TOTP(_PLAIN_ADMIN_TOTP_SECRET).now()
+    verify_response = client.post("/api/v1/auth/login/verify-totp", json={"code": code})
+    assert verify_response.status_code == 200
 
     response = client.get("/api/v1/users")
     assert response.status_code == 403

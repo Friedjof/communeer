@@ -4,10 +4,7 @@ fixtures from `conftest.py` — no dependency overrides needed since mock mode
 is exactly what the shared test app already boots with).
 """
 
-
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
+from tests.conftest import login_as_admin as _login
 
 
 def test_status_returns_connected_for_mock_provider(client):
@@ -17,7 +14,7 @@ def test_status_returns_connected_for_mock_provider(client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {"state": "connected", "qrCodeDataUrl": None, "detail": None}
+    assert body == {"state": "connected", "qrCodeDataUrl": None, "detail": None, "discoveryInProgress": False}
 
 
 def test_connect_returns_400_for_mock_provider(client):
@@ -65,6 +62,43 @@ def test_discover_and_sync_returns_503_when_provider_is_unavailable(client, monk
     assert response.json()["error"]["code"] == "service_unavailable"
 
 
+def test_discover_and_sync_continues_past_one_communitys_failure(client, monkeypatch):
+    """One community failing (e.g. a transient WPPConnect timeout while
+    hydrating just that one) must not discard every other community's
+    already-committed sync — the whole point of isolating each community in
+    its own try/except (see `discover_and_sync`'s comment). Only the failing
+    community's `wa_id` is made to raise; the real `sync_community` still
+    runs for every other one from the mock fixture."""
+    import communeer.whatsapp_status.router as whatsapp_status_router_module
+    from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
+    from communeer.sync.service import sync_community as real_sync_community
+
+    _login(client)
+
+    unity_wa_id = "120363010000000001@g.us"
+
+    def _fail_only_unity(db, provider, community_wa_id, **kwargs):
+        if community_wa_id == unity_wa_id:
+            raise WhatsAppProviderUnavailableError("boom")
+        return real_sync_community(db, provider, community_wa_id, **kwargs)
+
+    monkeypatch.setattr(whatsapp_status_router_module, "sync_community", _fail_only_unity)
+
+    response = client.post("/api/v1/whatsapp/discover-and-sync")
+
+    assert response.status_code == 200
+    body = response.json()
+    names = {c["name"] for c in body}
+    assert "Riverside Collective" in names
+    assert "Unity Alpha" not in names
+
+    # The failed community's provisioning reconciliation etc. never even ran
+    # (its sync raised before committing), but the flag must still reset
+    # cleanly for a follow-up retry.
+    status_response = client.get("/api/v1/whatsapp/status")
+    assert status_response.json()["discoveryInProgress"] is False
+
+
 def test_discover_and_sync_returns_409_when_a_sync_is_already_in_progress(client, monkeypatch):
     """`sync_community`'s `IntegrityError` -> `SyncInProgressError`
     translation (see `sync/service.py`) must surface as a clean 409 at
@@ -83,6 +117,50 @@ def test_discover_and_sync_returns_409_when_a_sync_is_already_in_progress(client
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "conflict"
+
+
+def test_discover_and_sync_returns_409_when_a_discovery_is_already_in_progress(client, monkeypatch):
+    """The module-level `_discovery_in_progress` flag (see
+    `whatsapp_status/router.py`) must reject a second, overlapping discovery
+    outright rather than racing the first — this is the guard a reloaded
+    page relies on not clicking through by accident."""
+    import communeer.whatsapp_status.router as whatsapp_status_router_module
+
+    _login(client)
+    monkeypatch.setattr(whatsapp_status_router_module, "_discovery_in_progress", True)
+
+    response = client.post("/api/v1/whatsapp/discover-and-sync")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+
+
+def test_discover_and_sync_flag_resets_after_success(client):
+    _login(client)
+
+    client.post("/api/v1/whatsapp/discover-and-sync")
+
+    status_response = client.get("/api/v1/whatsapp/status")
+    assert status_response.json()["discoveryInProgress"] is False
+
+
+def test_discover_and_sync_flag_resets_after_failure(client, monkeypatch):
+    """The flag must be cleared in a `finally` — a failed discovery must not
+    permanently lock out every future attempt."""
+    import communeer.whatsapp_status.router as whatsapp_status_router_module
+    from communeer.providers.whatsapp.base import WhatsAppProviderUnavailableError
+
+    _login(client)
+
+    def _raise_unavailable(*args, **kwargs):
+        raise WhatsAppProviderUnavailableError("boom")
+
+    monkeypatch.setattr(whatsapp_status_router_module, "sync_community", _raise_unavailable)
+    failed_response = client.post("/api/v1/whatsapp/discover-and-sync")
+    assert failed_response.status_code == 503
+
+    status_response = client.get("/api/v1/whatsapp/status")
+    assert status_response.json()["discoveryInProgress"] is False
 
 
 def test_status_requires_auth(client):

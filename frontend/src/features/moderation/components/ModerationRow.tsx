@@ -17,6 +17,10 @@ interface ModerationRowProps {
   /** The row's clickable content — a `Link` or `button` styled with
    * `MODERATION_ROW_TRIGGER_CLASS`. */
   children: ReactNode
+  /** Extra inline mutating action(s) (approve/reject, remove…) rendered
+   * between `children` and the dismiss button — same ghost-icon-button
+   * styling. Optional: most sections still only offer dismiss + navigate. */
+  actions?: ReactNode
   /** Position within its section's list — used to stagger the entrance
    * animation for the first `MAX_STAGGERED_ROWS` rows; every row past that
    * renders immediately, no delay. */
@@ -24,7 +28,7 @@ interface ModerationRowProps {
 }
 
 /** Shared row wrapper + dismiss button for a moderation queue item. */
-export function ModerationRow({ isDismissing, onDismiss, children, index = 0 }: ModerationRowProps) {
+export function ModerationRow({ isDismissing, onDismiss, children, actions, index = 0 }: ModerationRowProps) {
   const staggerIndex = Math.min(index, MAX_STAGGERED_ROWS)
   return (
     <li
@@ -32,6 +36,7 @@ export function ModerationRow({ isDismissing, onDismiss, children, index = 0 }: 
       style={{ animationDelay: `${staggerIndex * 30}ms`, animationFillMode: 'backwards' }}
     >
       {children}
+      {actions}
       <HelpTooltip content="Dismiss until this gets worse">
         <Button variant="ghost" size="icon-sm" aria-label="Dismiss" disabled={isDismissing} onClick={onDismiss}>
           <X className="size-4" />

@@ -11,7 +11,12 @@ export function whatsappStatusQueryOptions() {
     queryKey: whatsappKeys.status,
     queryFn: whatsappApi.getWhatsAppStatus,
     staleTime: 0,
-    refetchInterval: (query) => (query.state.data?.state === 'connected' ? false : 3000),
+    // Keep polling while a discovery is running even once `state ===
+    // 'connected'` — otherwise a page that reloaded mid-discovery would
+    // fetch `discoveryInProgress: true` once and then never poll again to
+    // see it flip back to `false`.
+    refetchInterval: (query) =>
+      query.state.data?.state !== 'connected' || query.state.data.discoveryInProgress ? 3000 : false,
   })
 }
 

@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = False
     session_max_age_seconds: int = 60 * 60 * 24 * 14  # 14 days
 
+    # Login brute-force protection — shared between the password step and the
+    # TOTP-verification step (see `auth/service.py`), so switching which
+    # factor is being guessed never resets the counter.
+    login_max_failed_attempts: int = 5
+    login_lockout_seconds: int = 60 * 15  # 15 minutes
+
     # Seed admin user, created idempotently on startup
     seed_admin_username: str = "admin"
     seed_admin_password: str = "changeme123"

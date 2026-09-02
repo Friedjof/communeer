@@ -9,7 +9,13 @@ from communeer.communities.service import (
     get_community_admin_count,
     get_community_pending_request_count,
 )
-from communeer.deps import get_current_user, get_db, get_provider, require_role
+from communeer.deps import (
+    get_current_user,
+    get_db,
+    get_provider,
+    require_community_access,
+    require_role,
+)
 from communeer.errors import bad_request, conflict, service_unavailable
 from communeer.models import User, UserRole
 from communeer.providers.whatsapp.base import (
@@ -27,7 +33,18 @@ router = APIRouter(tags=["sync"], dependencies=[Depends(get_current_user)])
 
 @router.post(
     "/communities/{community_id}/sync",
-    dependencies=[Depends(require_role(UserRole.owner, UserRole.admin))],
+    # `group_admin` may trigger a sync of a community containing their own
+    # group: sync is idempotent/read-only from WhatsApp's perspective (it
+    # only refreshes the local mirror), already guarded against concurrent
+    # runs (`SyncInProgressError`), and reveals nothing new through the API
+    # that isn't separately scoped by every route that actually *returns*
+    # data — a community-wide sync touching sibling groups' rows in the DB
+    # doesn't let them see anything through a response they couldn't
+    # already reach.
+    dependencies=[
+        Depends(require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)),
+        Depends(require_community_access()),
+    ],
 )
 def sync_community_route(
     community_id: uuid.UUID,

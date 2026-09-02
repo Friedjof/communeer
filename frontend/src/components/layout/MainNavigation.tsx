@@ -14,7 +14,10 @@ export function MainNavigation({ communityId, className, onNavigate }: MainNavig
   const persistedCommunityId = useUiStore((state) => state.selectedCommunityId)
   const activeCommunityId = communityId ?? persistedCommunityId ?? undefined
   const session = useSession()
-  const isViewer = session.data?.role === 'viewer'
+  // Moderation and the audit log are owner/admin-only on the backend (see
+  // `moderation/router.py`/`audit/router.py`) — `group_admin` gets a 403
+  // just like `viewer`, so both are hidden here.
+  const hidesModerationAndAudit = session.data?.role === 'viewer' || session.data?.role === 'group_admin'
 
   const linkClass =
     'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[status=active]:bg-primary/10 data-[status=active]:text-primary'
@@ -42,7 +45,7 @@ export function MainNavigation({ communityId, className, onNavigate }: MainNavig
             <Users className="size-4" />
             Members
           </Link>
-          {isViewer ? null : (
+          {hidesModerationAndAudit ? null : (
             <Link
               to="/c/$communityId/moderation"
               params={{ communityId: activeCommunityId }}
@@ -55,7 +58,7 @@ export function MainNavigation({ communityId, className, onNavigate }: MainNavig
           )}
         </>
       ) : null}
-      {isViewer ? null : (
+      {hidesModerationAndAudit ? null : (
         <Link to="/audit" className={linkClass} onClick={onNavigate}>
           <ScrollText className="size-4" />
           Audit log

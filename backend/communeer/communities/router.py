@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from communeer.authz import get_administered_community_ids, get_administered_group_ids
 from communeer.communities.schemas import (
     CommunityDetailAdvancedOut,
     CommunityDetailOut,
@@ -22,10 +23,15 @@ from communeer.communities.service import (
     get_group_last_message_at,
     list_community_members,
 )
-from communeer.deps import get_current_user, get_db, get_provider
+from communeer.deps import (
+    get_current_user,
+    get_db,
+    get_provider,
+    require_community_access,
+)
 from communeer.errors import not_found
 from communeer.groups.schemas import GroupSummaryOut
-from communeer.models import Community, Group
+from communeer.models import Community, Group, User, UserRole
 from communeer.providers.whatsapp.base import WhatsAppProvider
 
 router = APIRouter(tags=["communities"], dependencies=[Depends(get_current_user)])
@@ -56,6 +62,7 @@ def _summary(db: Session, community: Community) -> CommunitySummaryOut:
 def list_communities(
     db: Session = Depends(get_db),
     provider: WhatsAppProvider = Depends(get_provider),
+    user: User = Depends(get_current_user),
 ) -> list[CommunitySummaryOut]:
     communities = db.execute(select(Community).order_by(Community.name)).scalars().all()
 
@@ -63,15 +70,21 @@ def list_communities(
     # exactly as before this filter existed (this is what mock mode always
     # returns). A non-`None` set means the connected account's own admin
     # standing IS known, so narrow the list down to only what it can
-    # actually act on.
+    # actually act on. This is the *connected WhatsApp session's* own admin
+    # standing — orthogonal to, and applied independently of, the
+    # per-dashboard-user filter below.
     admin_wa_ids = provider.get_admin_community_wa_ids()
     if admin_wa_ids is not None:
         communities = [c for c in communities if c.wa_id in admin_wa_ids]
 
+    if user.role is UserRole.group_admin:
+        administered_community_ids = get_administered_community_ids(db, user)
+        communities = [c for c in communities if c.id in administered_community_ids]
+
     return [_summary(db, c) for c in communities]
 
 
-@router.get("/communities/{community_id}")
+@router.get("/communities/{community_id}", dependencies=[Depends(require_community_access())])
 def get_community(
     community_id: uuid.UUID,
     advanced: bool = False,
@@ -95,12 +108,21 @@ def get_community(
     return Response(content=out.model_dump_json(by_alias=True), media_type="application/json")
 
 
-@router.get("/communities/{community_id}/groups", response_model=list[GroupSummaryOut])
-def list_community_groups(community_id: uuid.UUID, db: Session = Depends(get_db)) -> list[GroupSummaryOut]:
+@router.get(
+    "/communities/{community_id}/groups",
+    response_model=list[GroupSummaryOut],
+    dependencies=[Depends(require_community_access())],
+)
+def list_community_groups(
+    community_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[GroupSummaryOut]:
     community = get_community_or_404(db, community_id)
     groups = db.execute(
         select(Group).where(Group.community_id == community.id).order_by(Group.name)
     ).scalars().all()
+    if user.role is UserRole.group_admin:
+        administered_group_ids = get_administered_group_ids(db, user)
+        groups = [g for g in groups if g.id in administered_group_ids]
     return [
         GroupSummaryOut(
             id=g.id,
@@ -119,10 +141,17 @@ def list_community_groups(community_id: uuid.UUID, db: Session = Depends(get_db)
     ]
 
 
-@router.get("/communities/{community_id}/members", response_model=list[MemberSummaryOut])
-def list_community_members_route(community_id: uuid.UUID, db: Session = Depends(get_db)) -> list[MemberSummaryOut]:
+@router.get(
+    "/communities/{community_id}/members",
+    response_model=list[MemberSummaryOut],
+    dependencies=[Depends(require_community_access())],
+)
+def list_community_members_route(
+    community_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[MemberSummaryOut]:
     community = get_community_or_404(db, community_id)
-    aggregates = list_community_members(db, community)
+    group_ids_filter = get_administered_group_ids(db, user) if user.role is UserRole.group_admin else None
+    aggregates = list_community_members(db, community, group_ids_filter=group_ids_filter)
     return [
         MemberSummaryOut(
             id=agg.member.id,
@@ -144,28 +173,41 @@ def list_community_members_route(community_id: uuid.UUID, db: Session = Depends(
     ]
 
 
-@router.get("/communities/{community_id}/history", response_model=list[CommunityHistoryPointOut])
+@router.get(
+    "/communities/{community_id}/history",
+    response_model=list[CommunityHistoryPointOut],
+    dependencies=[Depends(require_community_access())],
+)
 def get_community_history_route(
     community_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> list[CommunityHistoryPointOut]:
     """The community's growth time series, one point per past sync, oldest
-    first — the resolution of this history is exactly the sync frequency."""
+    first — the resolution of this history is exactly the sync frequency.
+
+    No `group_admin` filtering needed: this returns only whole-community
+    aggregate counts, never a per-group/per-member breakdown, so there's
+    nothing group-specific to leak beyond the route-level access check."""
     get_community_or_404(db, community_id)
     return [CommunityHistoryPointOut.model_validate(s) for s in get_community_history(db, community_id)]
 
 
-@router.get("/communities/{community_id}/groups/history", response_model=list[GroupHistorySeriesOut])
+@router.get(
+    "/communities/{community_id}/groups/history",
+    response_model=list[GroupHistorySeriesOut],
+    dependencies=[Depends(require_community_access())],
+)
 def get_group_history_route(
-    community_id: uuid.UUID, db: Session = Depends(get_db)
+    community_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> list[GroupHistorySeriesOut]:
     """Every group's growth time series in one response, so the frontend can
     build a per-group comparison chart without issuing N requests."""
     get_community_or_404(db, community_id)
+    group_ids_filter = get_administered_group_ids(db, user) if user.role is UserRole.group_admin else None
     return [
         GroupHistorySeriesOut(
             group_id=series.group_id,
             group_name=series.group_name,
             snapshots=[GroupHistoryPointOut.model_validate(s) for s in series.snapshots],
         )
-        for series in get_group_history_for_community(db, community_id)
+        for series in get_group_history_for_community(db, community_id, group_ids_filter=group_ids_filter)
     ]

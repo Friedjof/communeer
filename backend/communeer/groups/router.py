@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
@@ -8,18 +9,27 @@ from communeer.communities.service import (
     get_group_admin_count,
     get_group_last_message_at,
 )
-from communeer.deps import get_current_user, get_db, get_provider, require_role
+from communeer.deps import (
+    get_current_user,
+    get_db,
+    get_provider,
+    require_group_access,
+    require_role,
+)
 from communeer.errors import not_found
 from communeer.groups.schemas import (
     GroupDetailAdvancedOut,
     GroupDetailOut,
     GroupInviteLinkOut,
     GroupMemberOut,
+    GroupMessageOut,
     GroupRequestOut,
     GroupSummaryOut,
 )
 from communeer.groups.service import (
     approve_join_request,
+    list_group_messages,
+    list_group_pending_requests,
     reject_join_request,
     remove_group_member,
     set_group_member_admin,
@@ -28,18 +38,27 @@ from communeer.models import (
     Group,
     GroupMembership,
     Member,
-    MembershipStatus,
     User,
     UserRole,
 )
 from communeer.providers.whatsapp.base import WhatsAppProvider
 
-router = APIRouter(tags=["groups"], dependencies=[Depends(get_current_user)])
+router = APIRouter(
+    tags=["groups"],
+    # Every route below has `group_id` in its path, so this one dependency
+    # covers all of them: owner/admin/viewer pass through unchanged,
+    # `group_admin` is narrowed to only the group(s) they administer (see
+    # `authz.py`). This is also the fix for a pre-existing gap: the GET
+    # routes used to be reachable by any authenticated user regardless of
+    # which group/community they had anything to do with.
+    dependencies=[Depends(get_current_user), Depends(require_group_access())],
+)
 
-# Owner/admin only, same posture as `moderation/router.py` — a viewer can
-# still read `GET .../requests` and `GET .../members` via the router-level
-# `get_current_user` dependency above, just not act on them.
-_require_manager = require_role(UserRole.owner, UserRole.admin)
+# Owner/admin/group_admin (within their own groups, enforced by
+# `require_group_access` above) — a viewer can still read `GET .../requests`
+# and `GET .../members` via the router-level `get_current_user` dependency
+# above, just not act on them.
+_require_manager = require_role(UserRole.owner, UserRole.admin, UserRole.group_admin)
 
 
 def get_group_or_404(db: Session, group_id: uuid.UUID) -> Group:
@@ -114,7 +133,11 @@ def list_group_members(group_id: uuid.UUID, db: Session = Depends(get_db)) -> li
     ]
 
 
-@router.get("/groups/{group_id}/invite-link", response_model=GroupInviteLinkOut)
+@router.get(
+    "/groups/{group_id}/invite-link",
+    response_model=GroupInviteLinkOut,
+    dependencies=[Depends(_require_manager)],
+)
 def get_group_invite_link_route(
     group_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -131,12 +154,7 @@ def get_group_invite_link_route(
 @router.get("/groups/{group_id}/requests", response_model=list[GroupRequestOut])
 def list_group_requests(group_id: uuid.UUID, db: Session = Depends(get_db)) -> list[GroupRequestOut]:
     group = get_group_or_404(db, group_id)
-    rows = db.execute(
-        select(GroupMembership, Member)
-        .join(Member, Member.id == GroupMembership.member_id)
-        .where(GroupMembership.group_id == group.id, GroupMembership.status == MembershipStatus.pending)
-        .order_by(Member.display_name)
-    ).all()
+    rows = list_group_pending_requests(db, group.id)
     return [
         GroupRequestOut(
             member_id=member.id,
@@ -145,6 +163,35 @@ def list_group_requests(group_id: uuid.UUID, db: Session = Depends(get_db)) -> l
             requested_at=membership.joined_at,
         )
         for membership, member in rows
+    ]
+
+
+@router.get("/groups/{group_id}/messages", response_model=list[GroupMessageOut])
+def list_group_messages_route(
+    group_id: uuid.UUID,
+    limit: int = 50,
+    before: datetime | None = None,
+    search: str | None = None,
+    member_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+) -> list[GroupMessageOut]:
+    # No `_require_manager` gate — a viewer can read the log, same read
+    # access as `list_group_members`/`list_group_requests` above, just not
+    # act on anything from it.
+    group = get_group_or_404(db, group_id)
+    rows = list_group_messages(db, group.id, limit=limit, before=before, search=search, member_id=member_id)
+    return [
+        GroupMessageOut(
+            id=message.id,
+            member_id=member.id if member else None,
+            display_name=member.display_name if member else None,
+            avatar_url=member.avatar_url if member else None,
+            wa_id=member.wa_id if member else None,
+            message_type=message.message_type,
+            content=message.content,
+            sent_at=message.sent_at,
+        )
+        for message, member in rows
     ]
 
 

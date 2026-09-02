@@ -13,6 +13,18 @@ class ManagedUserOut(CamelModel):
     role: UserRole
     is_active: bool
     created_at: datetime
+    totp_enabled: bool
+    # Set only for auto-provisioned `group_admin` accounts (see
+    # `auth/provisioning.py`) — `None`/`True`/`True`/`None` respectively for
+    # every owner/admin/viewer account, which are never linked to a WhatsApp
+    # identity and are always "claimed"/"approved" by construction.
+    member_id: uuid.UUID | None
+    is_claimed: bool
+    # Whether an owner has released this account to receive its claim code
+    # yet — `False` for a newly-discovered, not-yet-reviewed group admin.
+    # See `auth/provisioning.py`'s module docstring.
+    is_approved: bool
+    claimed_at: datetime | None
 
 
 class CreateUserIn(CamelModel):

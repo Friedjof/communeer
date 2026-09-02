@@ -21,14 +21,27 @@ import { useSession } from '@/features/auth/queries'
 import type { UserRole } from '@/features/auth/types'
 import { cn } from '@/lib/utils'
 import { formatDate } from '@/lib/format'
-import { useCreateUser, useResetUserPassword, useUpdateUser, useUsers } from './queries'
+import {
+  useApproveGroupAdmin,
+  useCreateUser,
+  useResendClaimCode,
+  useResetUserPassword,
+  useResetUserTotp,
+  useUpdateUser,
+  useUsers,
+} from './queries'
 import type { ManagedUser } from './types'
 
+// `group_admin` is deliberately excluded — those accounts are only ever
+// auto-provisioned when a real WhatsApp group admin is synced (see backend
+// `users/service.py::create_user`/`update_user`, which reject assigning it
+// by hand), never chosen here.
 const ROLE_OPTIONS: UserRole[] = ['owner', 'admin', 'viewer']
 
 const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
   owner: 'Full access, including managing the team.',
   admin: 'Manage groups, members, and moderation.',
+  group_admin: 'Scoped to the WhatsApp group(s) this account administers.',
   viewer: 'Read-only access.',
 }
 
@@ -202,9 +215,116 @@ function ResetPasswordDialog({ user }: { user: ManagedUser }) {
   )
 }
 
-function UserRow({ user, currentUserId }: { user: ManagedUser; currentUserId?: string }) {
-  const updateUser = useUpdateUser()
+function ResetTotpButton({ user }: { user: ManagedUser }) {
+  const resetTotp = useResetUserTotp()
+
+  if (!user.totpEnabled) {
+    return null
+  }
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={resetTotp.isPending}
+      onClick={() => resetTotp.mutate(user.id)}
+    >
+      {resetTotp.isPending ? 'Resetting…' : 'Reset 2FA'}
+    </Button>
+  )
+}
+
+function ClaimStatusBadge({ user }: { user: ManagedUser }) {
+  if (user.memberId === null) {
+    return null
+  }
+  if (user.isClaimed) {
+    return (
+      <Badge variant="secondary" className="ml-2">
+        Claimed
+      </Badge>
+    )
+  }
+  if (!user.isApproved) {
+    return (
+      <Badge variant="outline" className="ml-2 border-blue-500 text-blue-600 dark:text-blue-400">
+        Pending approval
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="outline" className="ml-2 border-amber-500 text-amber-600 dark:text-amber-400">
+      Unclaimed
+    </Badge>
+  )
+}
+
+function ApproveGroupAdminButton({ user }: { user: ManagedUser }) {
+  const approve = useApproveGroupAdmin()
+
+  if (user.memberId === null || user.isClaimed || user.isApproved) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(user.id)}>
+        {approve.isPending ? 'Approving…' : 'Approve'}
+      </Button>
+      {approve.isSuccess ? (
+        <span className="text-xs text-muted-foreground">Approved, code sent.</span>
+      ) : (
+        <ApiErrorText error={approve.error} />
+      )}
+    </div>
+  )
+}
+
+function ResendClaimCodeButton({ user }: { user: ManagedUser }) {
+  const resendClaimCode = useResendClaimCode()
+
+  // Only for an already-approved account — a never-yet-approved one shows
+  // `ApproveGroupAdminButton` instead, which both approves and sends the
+  // first code in one action.
+  if (user.memberId === null || user.isClaimed || !user.isApproved) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={resendClaimCode.isPending}
+        onClick={() => resendClaimCode.mutate(user.id)}
+      >
+        {resendClaimCode.isPending ? 'Sending…' : 'Resend claim code'}
+      </Button>
+      {resendClaimCode.isSuccess ? (
+        <span className="text-xs text-muted-foreground">Code sent.</span>
+      ) : (
+        <ApiErrorText error={resendClaimCode.error} />
+      )}
+    </div>
+  )
+}
+
+function UserRow({
+  user,
+  currentUserId,
+  updateUser,
+}: {
+  user: ManagedUser
+  currentUserId?: string
+  updateUser: ReturnType<typeof useUpdateUser>
+}) {
   const isSelf = user.id === currentUserId
+  // A `group_admin` row's current value isn't one of the manually-
+  // assignable `ROLE_OPTIONS` (see the note above), so it needs its own
+  // item to render correctly — shown but disabled, since re-assigning
+  // *to* group_admin by hand isn't allowed; moving *away* from it (the
+  // other options) still is.
+  const roleOptions = user.role === 'group_admin' ? (['group_admin', ...ROLE_OPTIONS] as UserRole[]) : ROLE_OPTIONS
 
   return (
     <TableRow>
@@ -215,6 +335,7 @@ function UserRow({ user, currentUserId }: { user: ManagedUser; currentUserId?: s
             You
           </Badge>
         ) : null}
+        <ClaimStatusBadge user={user} />
       </TableCell>
       <TableCell>
         <Select
@@ -225,9 +346,14 @@ function UserRow({ user, currentUserId }: { user: ManagedUser; currentUserId?: s
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {ROLE_OPTIONS.map((option) => (
-              <SelectItem key={option} value={option} className="capitalize">
-                {option}
+            {roleOptions.map((option) => (
+              <SelectItem
+                key={option}
+                value={option}
+                disabled={option === 'group_admin'}
+                className="capitalize"
+              >
+                {option === 'group_admin' ? 'Group admin' : option}
               </SelectItem>
             ))}
           </SelectContent>
@@ -244,7 +370,12 @@ function UserRow({ user, currentUserId }: { user: ManagedUser; currentUserId?: s
       </TableCell>
       <TableCell className="text-muted-foreground">{formatDate(user.createdAt)}</TableCell>
       <TableCell className="text-right">
-        <ResetPasswordDialog user={user} />
+        <div className="flex justify-end gap-1.5">
+          <ApproveGroupAdminButton user={user} />
+          <ResendClaimCodeButton user={user} />
+          <ResetTotpButton user={user} />
+          <ResetPasswordDialog user={user} />
+        </div>
       </TableCell>
     </TableRow>
   )
@@ -285,7 +416,7 @@ export function UsersPage() {
           </TableHeader>
           <TableBody>
             {users.data.map((user) => (
-              <UserRow key={user.id} user={user} currentUserId={session.data?.id} />
+              <UserRow key={user.id} user={user} currentUserId={session.data?.id} updateUser={updateUser} />
             ))}
           </TableBody>
         </Table>

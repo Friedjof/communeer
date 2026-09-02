@@ -36,6 +36,12 @@ module. There is no WPPConnect/wa-js event for "someone else read a
 message" (`onAck` only ever covers the connected account's own outgoing
 messages) — see `models/membership.py`'s `ActivityType` docstring for the
 same honest-non-availability posture already established for `last_seen_at`.
+
+`onmessage` additionally inserts a `GroupMessage` history row (see
+`models/message.py`) alongside the existing `last_activity_*` stamping —
+idempotent on `(group_id, wa_message_id)` since WPPConnect makes no
+delivery-once guarantee. `onreactionmessage` never writes to that table
+(reactions aren't message history, see that handler below).
 """
 
 import logging
@@ -49,7 +55,14 @@ from sqlalchemy.orm import Session
 from communeer.config import Settings, get_settings
 from communeer.deps import get_db, get_provider
 from communeer.errors import not_found
-from communeer.models import ActivityType, Group, GroupMembership, Member
+from communeer.models import (
+    ActivityType,
+    Group,
+    GroupMembership,
+    GroupMessage,
+    Member,
+    MessageType,
+)
 from communeer.providers.whatsapp.base import (
     WhatsAppProvider,
     WhatsAppProviderUnavailableError,
@@ -73,6 +86,14 @@ logger = logging.getLogger("communeer.webhooks")
 router = APIRouter(tags=["webhooks"])
 
 _ACTIVITY_CONTENT_MAX_LEN = 200
+
+# `onmessage` payload `type` values this module stores message history for.
+# Everything outside this union (`fromMe`'s own filter aside) is left
+# ignored exactly as before this table existed — an unconfirmed/unrecognized
+# `type` (e.g. a group-system notice) is skipped rather than guessed at.
+_TEXT_MESSAGE_TYPES = {"chat"}
+_MEDIA_MESSAGE_TYPES = {"image", "video", "audio", "ptt", "document", "sticker", "location", "vcard"}
+_MEDIA_PLACEHOLDER = "[media message]"
 
 
 def _jid(value: object) -> str | None:
@@ -119,7 +140,8 @@ def _find_memberships_by_member_wa_id(db: Session, member_wa_id: str) -> list[Gr
 
 
 def _handle_onmessage(db: Session, payload: dict[str, Any]) -> None:
-    if payload.get("type") != "chat" or payload.get("fromMe"):
+    message_type_raw = payload.get("type")
+    if payload.get("fromMe") or message_type_raw not in (_TEXT_MESSAGE_TYPES | _MEDIA_MESSAGE_TYPES):
         return
 
     group_wa_id = _jid(payload.get("chatId")) or _jid(payload.get("from"))
@@ -140,7 +162,9 @@ def _handle_onmessage(db: Session, payload: dict[str, Any]) -> None:
     if timestamp is None:
         return
     body = payload.get("body")
-    content = _truncate(body if isinstance(body, str) else None)
+    is_text = message_type_raw in _TEXT_MESSAGE_TYPES
+    raw_content = body if isinstance(body, str) and body else None
+    content = _truncate(raw_content)
 
     changed = False
     # `last_message_at`: the same forward-only field `sync_community`
@@ -161,15 +185,46 @@ def _handle_onmessage(db: Session, payload: dict[str, Any]) -> None:
         membership.last_activity_content = content
         changed = True
 
+    # Message-history insert: independent of the forward-only stamping above
+    # (an out-of-order delivery that doesn't advance `last_activity_at` still
+    # gets its own history row) and idempotent on `(group_id, wa_message_id)`
+    # since WPPConnect makes no delivery-once guarantee for webhooks.
+    wa_message_id = _extract_wa_message_id(payload.get("id"))
+    if wa_message_id is not None:
+        already_stored = db.execute(
+            select(GroupMessage.id).where(
+                GroupMessage.group_id == membership.group_id,
+                GroupMessage.wa_message_id == wa_message_id,
+            )
+        ).scalar_one_or_none()
+        if already_stored is None:
+            db.add(
+                GroupMessage(
+                    group_id=membership.group_id,
+                    member_id=membership.member_id,
+                    wa_message_id=wa_message_id,
+                    message_type=MessageType.text if is_text else MessageType.media,
+                    content=raw_content if is_text else (raw_content or _MEDIA_PLACEHOLDER),
+                    sent_at=timestamp,
+                    raw_metadata=payload,
+                )
+            )
+            changed = True
+
     if changed:
         db.commit()
 
 
-def _reacted_message_id(msg_id: Any) -> str | None:
-    """The id of the message a reaction was left on — `msgId._serialized`
-    (preferred) or its bare `id` field. Used to correlate a ❌ reaction back
-    to a renewal reminder DM (see `renewals/service.py`), independent of
-    whatever group/membership matching the caller does below."""
+def _extract_wa_message_id(msg_id: Any) -> str | None:
+    """The id of a message, in whichever shape it arrived in — a plain
+    string (`onmessage`'s own `id` field) or the `{fromMe, remote, id,
+    participant, _serialized}` `MsgKey`-shaped dict wa-js uses elsewhere
+    (`onreactionmessage`'s `msgId`, referencing the *reacted-to* message).
+    Used both to store message history (`_handle_onmessage`) and to
+    correlate a ❌ reaction back to a renewal reminder DM (see
+    `renewals/service.py`) via `_handle_onreactionmessage`."""
+    if isinstance(msg_id, str) and msg_id:
+        return msg_id
     if not isinstance(msg_id, dict):
         return None
     serialized = msg_id.get("_serialized")
@@ -182,7 +237,7 @@ def _reacted_message_id(msg_id: Any) -> str | None:
 def _handle_onreactionmessage(db: Session, payload: dict[str, Any]) -> None:
     msg_id = payload.get("msgId")
     reaction_text = payload.get("reactionText")
-    reacted_message_id = _reacted_message_id(msg_id)
+    reacted_message_id = _extract_wa_message_id(msg_id)
     # A renewal reminder is a direct message, not a group message — no
     # group/membership matching applies to it, so this short-circuits before
     # (and independent of) the group-activity logic below. If no confirmation

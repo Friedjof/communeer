@@ -32,6 +32,7 @@ from communeer.renewals.service import (
     unarchive_campaign,
 )
 from communeer.sync.service import sync_community
+from tests.conftest import login_as_admin as _login
 
 UNITY_WA_ID = "120363010000000001@g.us"
 UNITY_MARKETPLACE_WA_ID = "120363010000000010@g.us"
@@ -372,9 +373,6 @@ def test_get_campaign_summaries_query_count_does_not_scale_with_campaign_count(d
 # ---------------------------------------------------------------------------
 
 
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
 
 
 def _get_group_id(client, community_id: str, name: str) -> str:

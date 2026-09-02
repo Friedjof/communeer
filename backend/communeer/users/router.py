@@ -3,8 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from communeer.deps import get_current_user, get_db, require_role
+from communeer.deps import get_current_user, get_db, get_provider, require_role
 from communeer.models import User, UserRole
+from communeer.providers.whatsapp.base import WhatsAppProvider
 from communeer.users.schemas import (
     CreateUserIn,
     ManagedUserOut,
@@ -12,8 +13,11 @@ from communeer.users.schemas import (
     UpdateUserIn,
 )
 from communeer.users.service import (
+    approve_group_admin,
     create_user,
     list_users,
+    resend_claim_code,
+    reset_user_2fa,
     reset_user_password,
     update_user,
 )
@@ -56,3 +60,32 @@ def reset_user_password_route(
     actor: User = Depends(get_current_user),
 ) -> None:
     reset_user_password(db, user_id, new_password=body.password, actor_user_id=actor.id)
+
+
+@router.post("/users/{user_id}/reset-2fa", status_code=status.HTTP_204_NO_CONTENT)
+def reset_user_2fa_route(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(get_current_user),
+) -> None:
+    reset_user_2fa(db, user_id, actor_user_id=actor.id)
+
+
+@router.post("/users/{user_id}/resend-claim", status_code=status.HTTP_204_NO_CONTENT)
+def resend_claim_code_route(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    actor: User = Depends(get_current_user),
+) -> None:
+    resend_claim_code(db, provider, user_id, actor_user_id=actor.id)
+
+
+@router.post("/users/{user_id}/approve", status_code=status.HTTP_204_NO_CONTENT)
+def approve_group_admin_route(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    provider: WhatsAppProvider = Depends(get_provider),
+    actor: User = Depends(get_current_user),
+) -> None:
+    approve_group_admin(db, provider, user_id, actor_user_id=actor.id)

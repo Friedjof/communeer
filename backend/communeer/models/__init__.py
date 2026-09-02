@@ -9,6 +9,7 @@ from communeer.models.community import Community
 from communeer.models.group import Group
 from communeer.models.member import Member
 from communeer.models.membership import ActivityType, GroupMembership, MembershipStatus
+from communeer.models.message import GroupMessage, MessageType
 from communeer.models.moderation import ModerationDismissal
 from communeer.models.renewal import (
     RenewalCampaign,
@@ -16,7 +17,7 @@ from communeer.models.renewal import (
     RenewalConfirmationStatus,
 )
 from communeer.models.snapshot import CommunityMemberSnapshot, GroupMemberSnapshot
-from communeer.models.user import User, UserRole
+from communeer.models.user import User, UserRecoveryCode, UserRole
 
 __all__ = [
     "ActivityType",
@@ -27,12 +28,15 @@ __all__ = [
     "Group",
     "GroupMemberSnapshot",
     "GroupMembership",
+    "GroupMessage",
     "Member",
     "MembershipStatus",
+    "MessageType",
     "ModerationDismissal",
     "RenewalCampaign",
     "RenewalConfirmation",
     "RenewalConfirmationStatus",
     "User",
+    "UserRecoveryCode",
     "UserRole",
 ]

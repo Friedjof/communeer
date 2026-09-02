@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { Search } from 'lucide-react'
+import { AlertTriangle, Search } from 'lucide-react'
 import { useState } from 'react'
 import { CapacityBar } from '@/components/data/CapacityBar'
 import { Badge } from '@/components/ui/badge'
@@ -35,6 +35,21 @@ export function GroupSidebar({ communityId, currentGroupId, onNavigate, classNam
 
       {groups.isPending ? (
         <ListSkeleton count={4} />
+      ) : groups.isError ? (
+        // A dedicated, compact error state — this used to fall through to
+        // the "No groups found." empty state below, which looked identical
+        // to a genuinely empty community and gave no way to recover.
+        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-4 text-center">
+          <AlertTriangle className="size-5 text-destructive" />
+          <p className="text-sm text-muted-foreground">Couldn't load groups.</p>
+          <button
+            type="button"
+            className="text-sm text-primary underline-offset-4 hover:underline"
+            onClick={() => void groups.refetch()}
+          >
+            Try again
+          </button>
+        </div>
       ) : (
         <ul className="flex flex-col gap-1">
           {filtered.map((group) => (

@@ -558,6 +558,86 @@ def test_get_admin_community_wa_ids_returns_none_when_own_id_cannot_be_found():
 
 
 @respx.mock
+def test_get_admin_community_wa_ids_includes_community_with_no_detected_announcement_group():
+    """A community whose announcement group can't be matched (no `announce:
+    True` chat pointing back to it via `parentGroup`) is "can't tell if the
+    connected account administers it," not "confirmed not an admin" — same
+    fail-open principle as the top-level `None` return, applied per
+    community. Must be *included*, not silently dropped."""
+    _mock_token_and_connected(respx.mock)
+
+    root_wa_id = "120363400000000001@g.us"
+    own_lid = "236794549432473@lid"
+
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(root_wa_id),
+                "subject": "Orphan Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(root_wa_id)).respond(
+        200,
+        json=[{"id": {"_serialized": own_lid}, "isMe": True, "pushname": "Du"}],
+    )
+
+    provider = _provider()
+
+    assert provider.get_admin_community_wa_ids() == {root_wa_id}
+
+
+@respx.mock
+def test_get_admin_community_wa_ids_includes_community_when_group_admins_call_fails():
+    """A transient `group-admins` failure for one community's announcement
+    group must not exclude that community either — same fail-open principle
+    as above, this time triggered by a transport error instead of a missing
+    announcement group."""
+    _mock_token_and_connected(respx.mock)
+
+    root_wa_id = "120363500000000001@g.us"
+    announce_wa_id = "120363500000000010@g.us"
+    own_lid = "236794549432473@lid"
+
+    chats = [
+        {
+            "groupMetadata": {
+                "id": _jid(root_wa_id),
+                "subject": "Flaky Community",
+                "isParentGroup": True,
+                "parentGroup": None,
+                "announce": False,
+            }
+        },
+        {
+            "groupMetadata": {
+                "id": _jid(announce_wa_id),
+                "subject": "Announcements",
+                "isParentGroup": False,
+                "parentGroup": _jid(root_wa_id),
+                "announce": True,
+            }
+        },
+    ]
+    respx.mock.post(_list_chats_url()).respond(200, json=chats)
+    respx.mock.get(_group_members_url(root_wa_id)).respond(
+        200,
+        json=[{"id": {"_serialized": own_lid}, "isMe": True, "pushname": "Du"}],
+    )
+    respx.mock.get(_group_admins_url(announce_wa_id)).mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    provider = _provider()
+
+    assert provider.get_admin_community_wa_ids() == {root_wa_id}
+
+
+@respx.mock
 def test_get_admin_community_wa_ids_returns_none_when_not_connected():
     respx.mock.post(_generate_token_url()).respond(200, json={"token": "test-token"})
     respx.mock.get(_status_session_url()).respond(200, json={"status": "CLOSED"})

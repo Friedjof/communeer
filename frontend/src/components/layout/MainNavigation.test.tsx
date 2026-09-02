@@ -43,4 +43,15 @@ describe('MainNavigation', () => {
     expect(screen.getByText('Moderation')).toBeInTheDocument()
     expect(screen.getByText('Audit log')).toBeInTheDocument()
   })
+
+  it('hides Moderation and Audit log links for a group_admin', () => {
+    mockSession('group_admin')
+    render(<MainNavigation communityId="community-1" />)
+
+    expect(screen.queryByText('Moderation')).not.toBeInTheDocument()
+    expect(screen.queryByText('Audit log')).not.toBeInTheDocument()
+    expect(screen.getByText('Overview')).toBeInTheDocument()
+    expect(screen.getByText('Members')).toBeInTheDocument()
+    expect(screen.getByText('Settings')).toBeInTheDocument()
+  })
 })

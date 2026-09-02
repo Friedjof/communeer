@@ -10,18 +10,21 @@ methods) is turned into a `service_unavailable()` `ApiError` rather than
 touching the DB, so a failed WhatsApp write never desyncs local state.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from communeer.auth.provisioning import reconcile_admin_provisioning_for_group
 from communeer.communities.service import get_group_admin_count
 from communeer.errors import conflict, not_found, service_unavailable
 from communeer.models import (
     AuditEvent,
     Group,
     GroupMembership,
+    GroupMessage,
     Member,
     MembershipStatus,
 )
@@ -30,6 +33,55 @@ from communeer.providers.whatsapp.base import (
     WhatsAppProvider,
     WhatsAppProviderUnavailableError,
 )
+
+logger = logging.getLogger("communeer.groups")
+
+
+def list_group_pending_requests(db: Session, group_id: uuid.UUID) -> list[tuple[GroupMembership, Member]]:
+    """Pending join requests for one group, `(membership, member)` pairs
+    ordered by display name — shared by `groups/router.py`'s own
+    `GET /groups/{id}/requests` route and `moderation/router.py`'s
+    `capacity_attention` section (so the Moderation page can list/act on
+    requests inline without a second, diverging query)."""
+    return list(
+        db.execute(
+            select(GroupMembership, Member)
+            .join(Member, Member.id == GroupMembership.member_id)
+            .where(GroupMembership.group_id == group_id, GroupMembership.status == MembershipStatus.pending)
+            .order_by(Member.display_name)
+        ).all()
+    )
+
+
+def list_group_messages(
+    db: Session,
+    group_id: uuid.UUID,
+    *,
+    limit: int = 50,
+    before: datetime | None = None,
+    search: str | None = None,
+    member_id: uuid.UUID | None = None,
+) -> list[tuple[GroupMessage, Member | None]]:
+    """A group's message history, newest first — `(message, member)` pairs
+    (`member` is `None` for the rare row whose `member_id` was `SET NULL`,
+    see `models/message.py`). Cursor-paginated via `before` (the `sent_at`
+    of the oldest row the caller already has), not offset — an offset would
+    shift under the caller as new messages keep arriving on this
+    live-appending table."""
+    limit = max(1, min(limit, 200))
+    query = (
+        select(GroupMessage, Member)
+        .outerjoin(Member, Member.id == GroupMessage.member_id)
+        .where(GroupMessage.group_id == group_id)
+    )
+    if before is not None:
+        query = query.where(GroupMessage.sent_at < before)
+    if member_id is not None:
+        query = query.where(GroupMessage.member_id == member_id)
+    if search:
+        query = query.where(GroupMessage.content.ilike(f"%{search}%"))
+    query = query.order_by(GroupMessage.sent_at.desc()).limit(limit)
+    return list(db.execute(query).all())
 
 
 def _get_pending_membership_or_404(db: Session, group: Group, member_id: uuid.UUID) -> tuple[GroupMembership, Member]:
@@ -187,4 +239,17 @@ def set_group_member_admin(
     )
     db.commit()
     db.refresh(membership)
+
+    # This manual promote button never goes through `sync_community` (see
+    # module docstring), so it needs its own provisioning hook — best-effort
+    # side effect on top of an already-successful promotion, must never fail
+    # the request. Demotion doesn't need a symmetric call: `authz.py` derives
+    # access live from `GroupMembership.is_admin`, so a demoted admin's
+    # dashboard permissions already disappear on their own, nothing to undo.
+    if is_admin:
+        try:
+            reconcile_admin_provisioning_for_group(db, group.id)
+        except Exception:
+            logger.exception("Admin-account provisioning reconciliation failed for group %s", group.id)
+
     return membership

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { EmptyState } from '@/components/feedback/EmptyState'
 import { ErrorState } from '@/components/feedback/ErrorState'
+import { SecurityTab } from '@/features/auth/components/SecurityTab'
 import { useSession } from '@/features/auth/queries'
 import { useWhatsAppStatus } from '@/features/whatsapp/queries'
 import type { WhatsAppConnectionState } from '@/features/whatsapp/types'
@@ -87,10 +88,14 @@ export function SettingsPage() {
       <Tabs defaultValue="team">
         <TabsList>
           <TabsTrigger value="team">Team</TabsTrigger>
+          <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="connection">Connection</TabsTrigger>
         </TabsList>
         <TabsContent value="team">
           <TeamTab />
+        </TabsContent>
+        <TabsContent value="security">
+          <SecurityTab />
         </TabsContent>
         <TabsContent value="connection">
           <ConnectionTab />

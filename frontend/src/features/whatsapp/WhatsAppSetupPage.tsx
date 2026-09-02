@@ -1,16 +1,19 @@
 import { useNavigate } from '@tanstack/react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, MessageCircle } from 'lucide-react'
 import { useState } from 'react'
 import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { communityKeys } from '@/features/communities/queries'
 import { useSession } from '@/features/auth/queries'
-import { useConnectWhatsApp, useDiscoverAndSync, useWhatsAppStatus } from './queries'
+import { useConnectWhatsApp, useDiscoverAndSync, useWhatsAppStatus, whatsappKeys } from './queries'
 import type { WhatsAppConnectionState } from './types'
 
 export function WhatsAppSetupPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const status = useWhatsAppStatus()
   const connect = useConnectWhatsApp()
   const discoverAndSync = useDiscoverAndSync()
@@ -34,6 +37,30 @@ export function WhatsAppSetupPage() {
     setLastObservedState(currentState)
     if (currentState && currentState !== 'disconnected') {
       setAwaitingProgress(false)
+    }
+  }
+
+  // Mirrors the `awaitingProgress`/`lastObservedState` pattern above, for the
+  // server-reported discovery flag: this covers a page that reloaded while
+  // `POST /whatsapp/discover-and-sync` was still running server-side (see
+  // `whatsapp_status/router.py`) — this page instance never itself started
+  // that mutation, so `discoverAndSync.isPending`/its own `onSuccess` can't
+  // fire the navigate. Observing the polled flag flip from `true` to `false`
+  // is the only way this instance finds out discovery just finished.
+  const discoveryInProgress = status.data?.discoveryInProgress ?? false
+  const [lastDiscoveryInProgress, setLastDiscoveryInProgress] = useState(discoveryInProgress)
+  if (discoveryInProgress !== lastDiscoveryInProgress) {
+    setLastDiscoveryInProgress(discoveryInProgress)
+    if (lastDiscoveryInProgress && !discoveryInProgress) {
+      // This instance never called `useDiscoverAndSync` itself, so its
+      // `onSuccess` (which invalidates `communityKeys.all`) never ran —
+      // without this, `indexRoute`'s `beforeLoad` could serve a cached,
+      // pre-discovery (possibly empty) communities list for up to
+      // `staleTime`, landing back on "No communities yet" right after
+      // discovery actually found some.
+      void queryClient.invalidateQueries({ queryKey: communityKeys.all })
+      void queryClient.invalidateQueries({ queryKey: whatsappKeys.status })
+      void navigate({ to: '/' })
     }
   }
 
@@ -88,7 +115,7 @@ export function WhatsAppSetupPage() {
               connectPending={connect.isPending || awaitingProgress}
               connectError={connectError}
               onDiscover={handleDiscover}
-              discoverPending={discoverAndSync.isPending}
+              discoverPending={discoverAndSync.isPending || discoveryInProgress}
               discoverError={discoverError}
               isViewer={isViewer}
             />

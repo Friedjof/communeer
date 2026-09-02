@@ -10,6 +10,7 @@ recomputes every denormalized count from the DB rows that actually exist
 and writes one `AuditEvent` describing what changed.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from communeer.auth.provisioning import reconcile_admin_provisioning_for_community
 from communeer.communities.service import (
     get_community_admin_count,
     get_community_pending_request_count,
@@ -39,6 +41,8 @@ from communeer.providers.whatsapp.base import (
     ProviderMember,
     WhatsAppProvider,
 )
+
+logger = logging.getLogger("communeer.sync")
 
 
 class CommunityNotFoundError(Exception):
@@ -349,4 +353,16 @@ def _sync_community_impl(
 
     db.commit()
     db.refresh(community)
+
+    # Auto-provisioning is a best-effort side effect on top of an already-
+    # successful sync — it must never turn this into a failed request. This
+    # single call site covers "Sync now," "Discover and sync," the
+    # boot-time priming loop, AND the webhook-triggered resync
+    # (`webhooks/router.py::_handle_onparticipantschanged` -> `sync_community`),
+    # i.e. it also catches admin promotions done directly in WhatsApp.
+    try:
+        reconcile_admin_provisioning_for_community(db, community.id)
+    except Exception:
+        logger.exception("Admin-account provisioning reconciliation failed for community %s", community.id)
+
     return community

@@ -1,5 +1,5 @@
 import { apiGet, apiPost } from '@/api/client'
-import type { GroupDetail, GroupJoinRequest, GroupMemberRow } from './types'
+import type { GroupDetail, GroupJoinRequest, GroupMemberRow, GroupMessage } from './types'
 
 export function getGroup(groupId: string, advanced = false): Promise<GroupDetail> {
   const query = advanced ? '?advanced=true' : ''
@@ -12,6 +12,23 @@ export function getGroupMembers(groupId: string): Promise<GroupMemberRow[]> {
 
 export function getGroupRequests(groupId: string): Promise<GroupJoinRequest[]> {
   return apiGet<GroupJoinRequest[]>(`/groups/${groupId}/requests`)
+}
+
+export interface GetGroupMessagesParams {
+  limit?: number
+  before?: string
+  search?: string
+  memberId?: string
+}
+
+export function getGroupMessages(groupId: string, params: GetGroupMessagesParams = {}): Promise<GroupMessage[]> {
+  const query = new URLSearchParams()
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  if (params.before) query.set('before', params.before)
+  if (params.search) query.set('search', params.search)
+  if (params.memberId) query.set('member_id', params.memberId)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return apiGet<GroupMessage[]>(`/groups/${groupId}/messages${suffix}`)
 }
 
 export function getGroupInviteLink(groupId: string): Promise<{ inviteLink: string | null }> {

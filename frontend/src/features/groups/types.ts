@@ -49,4 +49,18 @@ export interface GroupJoinRequest {
   requestedAt: string
 }
 
-export type GroupDetailTab = 'overview' | 'members' | 'requests' | 'renewals' | 'advanced'
+export type MessageType = 'text' | 'media' | 'system'
+
+export interface GroupMessage {
+  id: string
+  /** `null` for the rare row whose sender could no longer be resolved to a `Member`. */
+  memberId: string | null
+  displayName: string | null
+  avatarUrl: string | null
+  waId: string | null
+  messageType: MessageType
+  content: string | null
+  sentAt: string
+}
+
+export type GroupDetailTab = 'overview' | 'members' | 'requests' | 'renewals' | 'messages' | 'advanced'

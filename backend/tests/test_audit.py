@@ -4,10 +4,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-
-def _login(client) -> None:
-    response = client.post("/api/v1/auth/login", json={"username": "admin", "password": "changeme123"})
-    assert response.status_code == 200
+from tests.conftest import login_as_admin as _login
 
 
 def test_filter_by_action_returns_only_matching_events(client):
