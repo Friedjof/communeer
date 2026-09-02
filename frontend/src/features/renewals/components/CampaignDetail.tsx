@@ -15,9 +15,10 @@ import { NonRespondersTab } from './NonRespondersTab'
 
 interface CampaignDetailProps {
   campaignId: string
+  groupName: string
 }
 
-export function CampaignDetail({ campaignId }: CampaignDetailProps) {
+export function CampaignDetail({ campaignId, groupName }: CampaignDetailProps) {
   const campaign = useRenewalCampaign(campaignId)
   const checkReactions = useCheckRenewalReactions(campaignId)
   const processRemovals = useProcessDueRemovals(campaignId)
@@ -128,7 +129,12 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
             </TabsTrigger>
           </TabsList>
           <TabsContent value="all">
-            <ConfirmationsTable campaignId={campaignId} confirmations={data.confirmations} />
+            <ConfirmationsTable
+              campaignId={campaignId}
+              confirmations={data.confirmations}
+              groupName={groupName}
+              deadline={data.deadline}
+            />
           </TabsContent>
           <TabsContent value="non-responders">
             <NonRespondersTab campaignId={campaignId} />

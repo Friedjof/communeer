@@ -15,10 +15,11 @@ import { StartRenewalDialog } from './StartRenewalDialog'
 
 interface StartRenewalSectionProps {
   groupId: string
+  groupName: string
   onCampaignCreated: (campaignId: string) => void
 }
 
-export function StartRenewalSection({ groupId, onCampaignCreated }: StartRenewalSectionProps) {
+export function StartRenewalSection({ groupId, groupName, onCampaignCreated }: StartRenewalSectionProps) {
   const suggestions = useRenewalSuggestions(groupId)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -108,6 +109,7 @@ export function StartRenewalSection({ groupId, onCampaignCreated }: StartRenewal
 
       <StartRenewalDialog
         groupId={groupId}
+        groupName={groupName}
         members={selectedMembers}
         open={dialogOpen}
         onOpenChange={setDialogOpen}

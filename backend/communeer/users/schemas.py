@@ -25,6 +25,11 @@ class ManagedUserOut(CamelModel):
     # See `auth/provisioning.py`'s module docstring.
     is_approved: bool
     claimed_at: datetime | None
+    # `None` for every owner/admin/viewer account (never linked to a WhatsApp
+    # identity) — set for a `group_admin` account so a send-confirmation
+    # dialog (see `UsersPage.tsx`) can show who a claim-code message actually
+    # goes to.
+    phone_number_masked: str | None
 
 
 class CreateUserIn(CamelModel):

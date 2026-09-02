@@ -69,7 +69,12 @@ export function GroupDetailPage({
           <GroupRequestsTab groupId={groupId} />
         </TabsContent>
         <TabsContent value="renewals">
-          <GroupRenewalsTab groupId={groupId} selectedCampaignId={selectedCampaignId} onSelectCampaign={onSelectCampaign} />
+          <GroupRenewalsTab
+            groupId={groupId}
+            groupName={group.data.name}
+            selectedCampaignId={selectedCampaignId}
+            onSelectCampaign={onSelectCampaign}
+          />
         </TabsContent>
         <TabsContent value="messages">
           <GroupMessagesTab groupId={groupId} />

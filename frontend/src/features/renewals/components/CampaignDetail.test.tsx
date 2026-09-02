@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionUser } from '@/features/auth/types'
@@ -84,7 +84,7 @@ describe('CampaignDetail', () => {
     setup('viewer')
     render(
       <TooltipProvider>
-        <CampaignDetail campaignId="campaign-1" />
+        <CampaignDetail campaignId="campaign-1" groupName="Test Group" />
       </TooltipProvider>,
     )
 
@@ -95,10 +95,29 @@ describe('CampaignDetail', () => {
     setup('owner')
     render(
       <TooltipProvider>
-        <CampaignDetail campaignId="campaign-1" />
+        <CampaignDetail campaignId="campaign-1" groupName="Test Group" />
       </TooltipProvider>,
     )
 
     expect(screen.getByRole('button', { name: 'Mark confirmed' })).toBeEnabled()
+  })
+
+  it('shows the exact reminder text before sending, and only sends after confirming', async () => {
+    setup('owner')
+    const mutate = vi.fn()
+    useSendRenewalReminderMock.mockReturnValue({ mutate, isPending: false, variables: undefined })
+    render(
+      <TooltipProvider>
+        <CampaignDetail campaignId="campaign-1" groupName="Unity Runners" />
+      </TooltipProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send reminder' }))
+    expect(mutate).not.toHaveBeenCalled()
+    expect(screen.getByText(/Unity Runners/)).toBeInTheDocument()
+    expect(screen.getByText(/We're checking in on who'd like to stay part of/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(mutate).toHaveBeenCalledWith('member-1', expect.anything())
   })
 })

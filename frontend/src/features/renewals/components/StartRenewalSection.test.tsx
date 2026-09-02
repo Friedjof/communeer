@@ -51,7 +51,7 @@ function renderSection(role: SessionUser['role']) {
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <StartRenewalSection groupId="group-1" onCampaignCreated={vi.fn()} />
+        <StartRenewalSection groupId="group-1" groupName="Test Group" onCampaignCreated={vi.fn()} />
       </TooltipProvider>
     </QueryClientProvider>,
   )

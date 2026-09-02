@@ -118,6 +118,15 @@ class User(Base):
     recovery_codes: Mapped[list["UserRecoveryCode"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    # Read-only: `Member` has no back-reference to `User` (a WhatsApp
+    # identity doesn't need to know which dashboard account it provisioned).
+    # Only used to surface `phone_number_masked` below for a send-confirmation
+    # UI (see `users/schemas.py::ManagedUserOut`) — never written to.
+    member: Mapped["Member | None"] = relationship(viewonly=True)  # noqa: F821
+
+    @property
+    def phone_number_masked(self) -> str | None:
+        return self.member.phone_number_masked if self.member is not None else None
 
 
 class UserRecoveryCode(Base):

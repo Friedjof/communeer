@@ -1,3 +1,4 @@
+import { addDays } from 'date-fns'
 import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -12,12 +13,15 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { MessagePreview } from '@/components/data/MessagePreview'
 import { useCreateRenewalCampaign } from '../queries'
+import { buildRenewalReminderPreview } from '../messagePreview'
 import type { RenewalSuggestion } from '../types'
 import { initials } from '@/lib/format'
 
 interface StartRenewalDialogProps {
   groupId: string
+  groupName: string
   members: RenewalSuggestion[]
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -26,9 +30,17 @@ interface StartRenewalDialogProps {
 
 const DEFAULT_DEADLINE_DAYS = 7
 
-export function StartRenewalDialog({ groupId, members, open, onOpenChange, onCreated }: StartRenewalDialogProps) {
+export function StartRenewalDialog({
+  groupId,
+  groupName,
+  members,
+  open,
+  onOpenChange,
+  onCreated,
+}: StartRenewalDialogProps) {
   const [deadlineDays, setDeadlineDays] = useState(DEFAULT_DEADLINE_DAYS)
   const createCampaign = useCreateRenewalCampaign(groupId)
+  const messagePreview = buildRenewalReminderPreview(groupName, addDays(new Date(), deadlineDays))
 
   function handleOpenChange(next: boolean) {
     if (!next) {
@@ -62,19 +74,20 @@ export function StartRenewalDialog({ groupId, members, open, onOpenChange, onCre
             </Badge>
           </div>
           <DialogDescription>
-            This creates a tracking list and sends a reminder — review it before continuing.
+            This sends the exact message below to every member listed, right now. Review it before continuing.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" />
           <p>
-            Communeer automatically sends each member a reminder (in German and English) explaining how to confirm.
             If someone reacts <strong>❌</strong> to it, that's read automatically and counts as "no longer
             interested" — they're immediately treated as expired, no need to wait for the deadline. Removing anyone
             from WhatsApp still stays a manual step.
           </p>
         </div>
+
+        <MessagePreview text={messagePreview} />
 
         <div className="flex max-h-48 flex-col gap-2 overflow-y-auto rounded-lg border p-2">
           {members.map((member) => (

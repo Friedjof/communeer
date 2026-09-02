@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ErrorState } from '@/components/feedback/ErrorState'
 import { ListSkeleton } from '@/components/feedback/LoadingSkeletons'
 import { ApiError } from '@/api/client'
+import { MessagePreview } from '@/components/data/MessagePreview'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -30,6 +31,7 @@ import {
   useUpdateUser,
   useUsers,
 } from './queries'
+import { CLAIM_CODE_MESSAGE_PREVIEW } from './messagePreview'
 import type { ManagedUser } from './types'
 
 // `group_admin` is deliberately excluded — those accounts are only ever
@@ -259,6 +261,73 @@ function ClaimStatusBadge({ user }: { user: ManagedUser }) {
   )
 }
 
+/** Shared by `ApproveGroupAdminButton` and `ResendClaimCodeButton` — both
+ * send the exact same claim-code message, the only difference is the
+ * trigger/dialog copy and which mutation confirming actually calls. Shown
+ * every time, no "don't ask again" — see `AGENTS.md`'s "never let Communeer
+ * write to WhatsApp automatically" principle. */
+function SendClaimCodeDialog({
+  user,
+  triggerLabel,
+  pendingLabel,
+  dialogTitle,
+  confirmLabel,
+  variant,
+  mutation,
+  successMessage,
+}: {
+  user: ManagedUser
+  triggerLabel: string
+  pendingLabel: string
+  dialogTitle: string
+  confirmLabel: string
+  variant: 'default' | 'outline'
+  mutation: ReturnType<typeof useApproveGroupAdmin> | ReturnType<typeof useResendClaimCode>
+  successMessage: string
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <Button variant={variant} size="sm" disabled={mutation.isPending}>
+            {triggerLabel}
+          </Button>
+        </DialogTrigger>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{dialogTitle}</DialogTitle>
+            <DialogDescription>
+              This sends a WhatsApp message to {user.username}
+              {user.phoneNumberMasked ? ` (${user.phoneNumberMasked})` : ''} right now. Exact text below.
+            </DialogDescription>
+          </DialogHeader>
+          <MessagePreview text={CLAIM_CODE_MESSAGE_PREVIEW} />
+          <p className="text-xs text-muted-foreground">
+            The 6-digit code shown as {'••••••'} is generated when the message is sent.
+          </p>
+          <ApiErrorText error={mutation.error} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={mutation.isPending}
+              onClick={() => {
+                mutation.mutate(user.id, { onSuccess: () => setOpen(false) })
+              }}
+            >
+              {mutation.isPending ? pendingLabel : confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {mutation.isSuccess ? <span className="text-xs text-muted-foreground">{successMessage}</span> : null}
+    </div>
+  )
+}
+
 function ApproveGroupAdminButton({ user }: { user: ManagedUser }) {
   const approve = useApproveGroupAdmin()
 
@@ -267,16 +336,16 @@ function ApproveGroupAdminButton({ user }: { user: ManagedUser }) {
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(user.id)}>
-        {approve.isPending ? 'Approving…' : 'Approve'}
-      </Button>
-      {approve.isSuccess ? (
-        <span className="text-xs text-muted-foreground">Approved, code sent.</span>
-      ) : (
-        <ApiErrorText error={approve.error} />
-      )}
-    </div>
+    <SendClaimCodeDialog
+      user={user}
+      triggerLabel="Approve"
+      pendingLabel="Approving…"
+      dialogTitle={`Approve ${user.username} and send their claim code?`}
+      confirmLabel="Approve & send"
+      variant="default"
+      mutation={approve}
+      successMessage="Approved, code sent."
+    />
   )
 }
 
@@ -291,21 +360,16 @@ function ResendClaimCodeButton({ user }: { user: ManagedUser }) {
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={resendClaimCode.isPending}
-        onClick={() => resendClaimCode.mutate(user.id)}
-      >
-        {resendClaimCode.isPending ? 'Sending…' : 'Resend claim code'}
-      </Button>
-      {resendClaimCode.isSuccess ? (
-        <span className="text-xs text-muted-foreground">Code sent.</span>
-      ) : (
-        <ApiErrorText error={resendClaimCode.error} />
-      )}
-    </div>
+    <SendClaimCodeDialog
+      user={user}
+      triggerLabel="Resend claim code"
+      pendingLabel="Sending…"
+      dialogTitle={`Resend the claim code to ${user.username}?`}
+      confirmLabel="Send"
+      variant="outline"
+      mutation={resendClaimCode}
+      successMessage="Code sent."
+    />
   )
 }
 

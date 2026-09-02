@@ -5,20 +5,21 @@ import { StartRenewalSection } from '@/features/renewals/components/StartRenewal
 
 interface GroupRenewalsTabProps {
   groupId: string
+  groupName: string
   selectedCampaignId: string | null
   onSelectCampaign: (campaignId: string | null) => void
 }
 
-export function GroupRenewalsTab({ groupId, selectedCampaignId, onSelectCampaign }: GroupRenewalsTabProps) {
+export function GroupRenewalsTab({ groupId, groupName, selectedCampaignId, onSelectCampaign }: GroupRenewalsTabProps) {
   return (
     <div className="flex flex-col gap-4">
       <RenewalHowItWorks />
 
       <CampaignList groupId={groupId} selectedCampaignId={selectedCampaignId} onSelect={onSelectCampaign} />
 
-      {selectedCampaignId ? <CampaignDetail campaignId={selectedCampaignId} /> : null}
+      {selectedCampaignId ? <CampaignDetail campaignId={selectedCampaignId} groupName={groupName} /> : null}
 
-      <StartRenewalSection groupId={groupId} onCampaignCreated={onSelectCampaign} />
+      <StartRenewalSection groupId={groupId} groupName={groupName} onCampaignCreated={onSelectCampaign} />
     </div>
   )
 }

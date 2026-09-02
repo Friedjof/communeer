@@ -19,6 +19,9 @@ export interface ManagedUser {
    * owner/admin/viewer account by construction. */
   isApproved: boolean
   claimedAt: string | null
+  /** `null` for every owner/admin/viewer account — set for a `group_admin`
+   * account so a send-confirmation dialog can show who a message goes to. */
+  phoneNumberMasked: string | null
 }
 
 export interface CreateUserInput {
